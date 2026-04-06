@@ -8,6 +8,9 @@ import { randomUUID } from "node:crypto"
 import { PostgresService } from "../db/postgres.service"
 import { RedisQueueService } from "../redis/redis.service"
 
+const DEFAULT_S3_ENDPOINT = "https://s3.ru1.storage.beget.cloud"
+const DEFAULT_S3_BUCKET = "1bf1b61c108f-ecolms"
+
 export const stageOrder = [
   "source_compiled",
   "course_outline",
@@ -511,7 +514,7 @@ export class EcolmsStore {
       const sourceFileId = randomUUID()
       const uploadId = randomUUID()
       const storageKey = `source/${projectId}/${sourceFileId}/${input.fileName}`
-      const bucket = process.env.S3_BUCKET ?? "ecolms"
+      const bucket = process.env.S3_BUCKET ?? DEFAULT_S3_BUCKET
       const s3UploadId = randomUUID()
 
       await client.query(
@@ -589,7 +592,7 @@ export class EcolmsStore {
   async signUploadPart(uploadId: string, partNumber: number) {
     const session = await this.getUploadSession(uploadId)
     await this.db.query(`update upload_sessions set status = 'uploading' where id = $1`, [uploadId])
-    const endpoint = process.env.S3_ENDPOINT ?? "https://s3.example.invalid"
+    const endpoint = process.env.S3_ENDPOINT ?? DEFAULT_S3_ENDPOINT
 
     return {
       uploadId,
@@ -849,8 +852,8 @@ export class EcolmsStore {
 
   async downloadProject(projectId: string) {
     const artifacts: ArtifactRecord[] = await this.listArtifacts(projectId)
-    const endpoint = process.env.S3_ENDPOINT ?? "https://s3.example.invalid"
-    const bucket = process.env.S3_BUCKET ?? "ecolms"
+    const endpoint = process.env.S3_ENDPOINT ?? DEFAULT_S3_ENDPOINT
+    const bucket = process.env.S3_BUCKET ?? DEFAULT_S3_BUCKET
 
     return artifacts.map((artifact) => ({
       id: artifact.id,
