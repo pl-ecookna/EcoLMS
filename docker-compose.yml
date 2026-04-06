@@ -3,6 +3,13 @@ services:
     build:
       context: .
       dockerfile: docker/web.Dockerfile
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.ecolms-web.rule=Host(`ecolms-app-u9k5it-eda635-46-173-20-149.traefik.me`)"
+      - "traefik.http.routers.ecolms-web.entrypoints=websecure"
+      - "traefik.http.routers.ecolms-web.tls=true"
+      - "traefik.http.routers.ecolms-web.tls.certresolver=letsencrypt"
+      - "traefik.http.services.ecolms-web.loadbalancer.server.port=3000"
     environment:
       PORT: "3000"
       HOSTNAME: "0.0.0.0"
