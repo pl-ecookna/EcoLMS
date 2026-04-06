@@ -1,7 +1,9 @@
 import type { NextRequest } from "next/server"
 
-const DEFAULT_INTERNAL_API_URL =
-  "http://app-calculate-open-source-alarm-cob2f6:3001"
+const INTERNAL_API_URLS = [
+  "http://app-calculate-open-source-alarm-cob2f6:3001",
+  "http://api:3001",
+] as const
 
 function normalizeBaseUrl(value: string | undefined) {
   if (!value) {
@@ -14,18 +16,23 @@ function normalizeBaseUrl(value: string | undefined) {
     value.includes("127.0.0.1:3001")
   ) {
     return process.env.NODE_ENV === "production"
-      ? DEFAULT_INTERNAL_API_URL
+      ? INTERNAL_API_URLS[0]
       : "http://localhost:3001"
   }
 
   return value
 }
 
-const UPSTREAM_BASE_URL =
-  normalizeBaseUrl(process.env.ECOLMS_API_BASE_URL) ??
-  (process.env.NODE_ENV === "production"
-    ? DEFAULT_INTERNAL_API_URL
-    : "http://localhost:3001")
+const UPSTREAM_BASE_URLS =
+  process.env.NODE_ENV === "production"
+    ? [
+        normalizeBaseUrl(process.env.ECOLMS_API_BASE_URL),
+        ...INTERNAL_API_URLS,
+      ].filter((value): value is string => Boolean(value))
+    : [
+        normalizeBaseUrl(process.env.ECOLMS_API_BASE_URL) ??
+          "http://localhost:3001",
+      ]
 
 async function proxy(
   request: NextRequest,
@@ -34,35 +41,80 @@ async function proxy(
   const params = await context.params
   const path = params.path?.join("/") ?? ""
   const url = new URL(request.url)
-  const upstreamUrl = new URL(`${UPSTREAM_BASE_URL.replace(/\/$/, "")}/api/${path}`)
-  upstreamUrl.search = url.search
-
   const headers = new Headers(request.headers)
   headers.delete("host")
 
-  const requestInit = {
-    method: request.method,
-    headers,
-    body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
-    cache: "no-store",
-  } as RequestInit & { duplex?: "half" }
+  let lastNetworkError: unknown = null
+  let lastResponse: Response | null = null
 
-  if (request.method !== "GET" && request.method !== "HEAD") {
-    requestInit.duplex = "half"
+  for (const baseUrl of UPSTREAM_BASE_URLS) {
+    const upstreamUrl = new URL(`${baseUrl.replace(/\/$/, "")}/api/${path}`)
+    upstreamUrl.search = url.search
+
+    const requestInit = {
+      method: request.method,
+      headers,
+      body:
+        request.method === "GET" || request.method === "HEAD"
+          ? undefined
+          : request.body,
+      cache: "no-store",
+    } as RequestInit & { duplex?: "half" }
+
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      requestInit.duplex = "half"
+    }
+
+    try {
+      const response = await fetch(upstreamUrl, requestInit)
+      lastResponse = response
+
+      if (response.status < 500) {
+        const responseHeaders = new Headers(response.headers)
+        responseHeaders.delete("content-encoding")
+        responseHeaders.delete("transfer-encoding")
+        responseHeaders.delete("content-length")
+
+        return new Response(await response.arrayBuffer(), {
+          status: response.status,
+          statusText: response.statusText,
+          headers: responseHeaders,
+        })
+      }
+    } catch (error) {
+      lastNetworkError = error
+    }
   }
 
-  const response = await fetch(upstreamUrl, requestInit)
+  if (lastResponse) {
+    const responseHeaders = new Headers(lastResponse.headers)
+    responseHeaders.delete("content-encoding")
+    responseHeaders.delete("transfer-encoding")
+    responseHeaders.delete("content-length")
 
-  const responseHeaders = new Headers(response.headers)
-  responseHeaders.delete("content-encoding")
-  responseHeaders.delete("transfer-encoding")
-  responseHeaders.delete("content-length")
+    return new Response(await lastResponse.arrayBuffer(), {
+      status: lastResponse.status,
+      statusText: lastResponse.statusText,
+      headers: responseHeaders,
+    })
+  }
 
-  return new Response(await response.arrayBuffer(), {
-    status: response.status,
-    statusText: response.statusText,
-    headers: responseHeaders,
-  })
+  return new Response(
+    JSON.stringify({
+      success: false,
+      data: null,
+      error:
+        lastNetworkError instanceof Error
+          ? lastNetworkError.message
+          : "Upstream API is unavailable",
+    }),
+    {
+      status: 502,
+      headers: {
+        "content-type": "application/json",
+      },
+    }
+  )
 }
 
 export const GET = proxy
