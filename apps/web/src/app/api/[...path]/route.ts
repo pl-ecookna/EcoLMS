@@ -1,9 +1,30 @@
 import type { NextRequest } from "next/server"
 
+const DEFAULT_INTERNAL_API_URL =
+  "http://app-calculate-open-source-alarm-cob2f6:3001"
+
+function normalizeBaseUrl(value: string | undefined) {
+  if (!value) {
+    return undefined
+  }
+
+  if (
+    value.includes("api:3001") ||
+    value.includes("localhost:3001") ||
+    value.includes("127.0.0.1:3001")
+  ) {
+    return process.env.NODE_ENV === "production"
+      ? DEFAULT_INTERNAL_API_URL
+      : "http://localhost:3001"
+  }
+
+  return value
+}
+
 const UPSTREAM_BASE_URL =
-  process.env.ECOLMS_API_BASE_URL ??
+  normalizeBaseUrl(process.env.ECOLMS_API_BASE_URL) ??
   (process.env.NODE_ENV === "production"
-    ? "http://api:3001"
+    ? DEFAULT_INTERNAL_API_URL
     : "http://localhost:3001")
 
 async function proxy(

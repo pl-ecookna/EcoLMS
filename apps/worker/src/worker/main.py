@@ -23,11 +23,37 @@ class WorkerConfig:
     job_queue_key: str = "ecolms:processing-jobs"
 
 
+def normalize_service_url(value: str | None, *, default_prod: str, default_dev: str) -> str:
+    if not value:
+        return default_prod if os.getenv("NODE_ENV") == "production" else default_dev
+
+    if any(
+        marker in value
+        for marker in (
+            "api:3001",
+            "transcription-service:3002",
+            "localhost:3001",
+            "localhost:3002",
+            "127.0.0.1:3001",
+            "127.0.0.1:3002",
+        )
+    ):
+        return default_prod if os.getenv("NODE_ENV") == "production" else default_dev
+
+    return value
+
+
 def load_config() -> WorkerConfig:
     return WorkerConfig(
-        api_base_url=os.getenv("API_BASE_URL", "http://localhost:3001"),
-        transcription_service_url=os.getenv(
-            "TRANSCRIPTION_SERVICE_URL", "http://localhost:3002"
+        api_base_url=normalize_service_url(
+            os.getenv("API_BASE_URL"),
+            default_prod="http://app-calculate-open-source-alarm-cob2f6:3001",
+            default_dev="http://localhost:3001",
+        ),
+        transcription_service_url=normalize_service_url(
+            os.getenv("TRANSCRIPTION_SERVICE_URL"),
+            default_prod="http://app-copy-bluetooth-matrix-b869ye:3002",
+            default_dev="http://localhost:3002",
         ),
         postgres_url=os.getenv(
             "POSTGRES_URL",
