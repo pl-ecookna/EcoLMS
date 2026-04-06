@@ -2,7 +2,6 @@ import type { NextRequest } from "next/server"
 
 const UPSTREAM_BASE_URL =
   process.env.ECOLMS_API_BASE_URL ??
-  process.env.NEXT_PUBLIC_API_BASE_URL ??
   (process.env.NODE_ENV === "production"
     ? "http://api:3001"
     : "http://localhost:3001")

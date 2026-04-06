@@ -24,13 +24,19 @@
 - `transcription-service`: `3002`
 - `worker`: без внешнего порта
 
+## Публичный доступ
+
+- наружу публикуется только `web`;
+- `api`, `worker` и `transcription-service` работают только во внутренней сети Dokploy/Docker;
+- для них не нужны отдельные публичные домены.
+
 ## Окружение
 
 ### `web`
 
 - `PORT=3000`
 - `HOSTNAME=0.0.0.0`
-- `NEXT_PUBLIC_API_BASE_URL=http://api:3001`
+- `ECOLMS_API_BASE_URL=http://api:3001`
 
 ### `api`
 
