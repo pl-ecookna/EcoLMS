@@ -12,6 +12,25 @@ import {
 
 const logger = new Logger("PostgresService")
 
+const INTERNAL_POSTGRES_URL =
+  "postgresql://postgres:vkqze4hgid6c3yny@ecolms-lmsdb-uloxp8:5432/postgres"
+
+function normalizePostgresUrl(value: string | undefined) {
+  if (!value) {
+    return INTERNAL_POSTGRES_URL
+  }
+
+  if (
+    value.includes("46.173.20.149:5435") ||
+    value.includes("localhost") ||
+    value.includes("127.0.0.1")
+  ) {
+    return INTERNAL_POSTGRES_URL
+  }
+
+  return value
+}
+
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS projects (
   id text PRIMARY KEY,
@@ -211,7 +230,7 @@ export class PostgresService implements OnModuleInit, OnModuleDestroy {
   private initialized = false
 
   constructor() {
-    const connectionString = process.env.POSTGRES_URL
+    const connectionString = normalizePostgresUrl(process.env.POSTGRES_URL)
     if (!connectionString) {
       throw new Error("POSTGRES_URL is required")
     }

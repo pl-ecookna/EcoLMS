@@ -23,6 +23,12 @@ class WorkerConfig:
     job_queue_key: str = "ecolms:processing-jobs"
 
 
+INTERNAL_POSTGRES_URL = (
+    "postgresql://postgres:vkqze4hgid6c3yny@ecolms-lmsdb-uloxp8:5432/postgres"
+)
+INTERNAL_REDIS_URL = "redis://default:0ttko0zmmp7klvsv@ecolms-lmsredis-czote9:6379"
+
+
 def normalize_service_url(value: str | None, *, default_prod: str, default_dev: str) -> str:
     if not value:
         return default_prod if os.getenv("NODE_ENV") == "production" else default_dev
@@ -55,11 +61,16 @@ def load_config() -> WorkerConfig:
             default_prod="http://app-copy-bluetooth-matrix-b869ye:3002",
             default_dev="http://localhost:3002",
         ),
-        postgres_url=os.getenv(
-            "POSTGRES_URL",
-            "postgresql://postgres:password@localhost:5432/ecolms",
+        postgres_url=normalize_service_url(
+            os.getenv("POSTGRES_URL"),
+            default_prod=INTERNAL_POSTGRES_URL,
+            default_dev="postgresql://postgres:password@localhost:5432/ecolms",
         ),
-        redis_url=os.getenv("REDIS_URL", "redis://localhost:6379"),
+        redis_url=normalize_service_url(
+            os.getenv("REDIS_URL"),
+            default_prod=INTERNAL_REDIS_URL,
+            default_dev="redis://localhost:6379",
+        ),
         s3_bucket=os.getenv("S3_BUCKET", "ecolms"),
         job_queue_key=os.getenv("WORKER_JOB_QUEUE_KEY", "ecolms:processing-jobs"),
     )

@@ -9,6 +9,24 @@ export type ProcessingJobMessage = {
 }
 
 const JOB_QUEUE_KEY = "ecolms:processing-jobs"
+const INTERNAL_REDIS_URL =
+  "redis://default:0ttko0zmmp7klvsv@ecolms-lmsredis-czote9:6379"
+
+function normalizeRedisUrl(value: string | undefined) {
+  if (!value) {
+    return INTERNAL_REDIS_URL
+  }
+
+  if (
+    value.includes("46.173.20.149:6379") ||
+    value.includes("localhost") ||
+    value.includes("127.0.0.1")
+  ) {
+    return INTERNAL_REDIS_URL
+  }
+
+  return value
+}
 
 function parseRedisUrl(redisUrl: string) {
   const url = new URL(redisUrl)
@@ -129,7 +147,7 @@ async function runRedisCommand(redisUrl: string, parts: string[]) {
 @Injectable()
 export class RedisQueueService {
   private readonly logger = new Logger(RedisQueueService.name)
-  private readonly redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379"
+  private readonly redisUrl = normalizeRedisUrl(process.env.REDIS_URL)
 
   async enqueueProcessingJob(message: ProcessingJobMessage) {
     await runRedisCommand(this.redisUrl, [
