@@ -1,0 +1,12 @@
+node_modules
+dist
+coverage
+.next
+.turbo
+.env
+.env.*
+!.env.example
+.DS_Store
+apps/*/node_modules
+apps/*/.next
+apps/*/dist
