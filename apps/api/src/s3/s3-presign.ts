@@ -14,6 +14,18 @@ export interface S3PresignPartInput {
   now?: Date
 }
 
+export interface S3PresignPutObjectInput {
+  endpoint: string
+  region: string
+  accessKeyId: string
+  secretAccessKey: string
+  sessionToken?: string
+  bucket: string
+  key: string
+  expiresInSeconds?: number
+  now?: Date
+}
+
 function encodeRfc3986(value: string) {
   return encodeURIComponent(value).replace(/[!'()*]/g, (char) =>
     `%${char.charCodeAt(0).toString(16).toUpperCase()}`
@@ -74,7 +86,10 @@ function buildSigningKey(secretAccessKey: string, dateStamp: string, region: str
   return hmacSha256(kService, "aws4_request")
 }
 
-export function createS3UploadPartPresignedUrl(input: S3PresignPartInput) {
+function createPresignedUrl(
+  input: S3PresignPartInput | S3PresignPutObjectInput,
+  queryExtras: Record<string, string>
+) {
   const expiresInSeconds = input.expiresInSeconds ?? 15 * 60
   const now = input.now ?? new Date()
   const { amzDate, dateStamp } = toAmzDate(now)
@@ -100,8 +115,7 @@ export function createS3UploadPartPresignedUrl(input: S3PresignPartInput) {
 
   const canonicalQueryString = canonicalQuery({
     ...authQueryParams,
-    partNumber: String(input.partNumber),
-    uploadId: input.uploadId,
+    ...queryExtras,
   })
   const canonicalHeaders = `host:${endpointUrl.host}\n`
   const signedHeaders = "host"
@@ -126,11 +140,19 @@ export function createS3UploadPartPresignedUrl(input: S3PresignPartInput) {
   const signingKey = buildSigningKey(input.secretAccessKey, dateStamp, input.region)
   const signature = createHmac("sha256", signingKey).update(stringToSign, "utf8").digest("hex")
 
-  const operationQuery = canonicalQuery({
-    uploadId: input.uploadId,
-    partNumber: String(input.partNumber),
-  })
   const authQuery = canonicalQuery(authQueryParams)
-  const signedQuery = `${operationQuery}&${authQuery}&X-Amz-Signature=${signature}`
+  const extraQuery = canonicalQuery(queryExtras)
+  const signedQuery = `${extraQuery}${extraQuery ? "&" : ""}${authQuery}&X-Amz-Signature=${signature}`
   return `${endpointUrl.origin}${canonicalUri}?${signedQuery}`
+}
+
+export function createS3UploadPartPresignedUrl(input: S3PresignPartInput) {
+  return createPresignedUrl(input, {
+    partNumber: String(input.partNumber),
+    uploadId: input.uploadId,
+  })
+}
+
+export function createS3PutObjectPresignedUrl(input: S3PresignPutObjectInput) {
+  return createPresignedUrl(input, {})
 }

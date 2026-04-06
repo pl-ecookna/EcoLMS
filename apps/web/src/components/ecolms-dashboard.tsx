@@ -341,12 +341,9 @@ export function EcolmsDashboard() {
             const signed = await signUploadPart(init.uploadId, partNumber)
 
             setUploadMessage(`Загружается ${file.name}: часть ${partNumber}/${totalParts}`)
-            const response = await fetch("/api/s3-upload", {
+            const response = await fetch(signed.signedUrl, {
               method: signed.method || "PUT",
-              headers: {
-                "x-target-url": signed.signedUrl,
-                ...(signed.headers ?? {}),
-              },
+              headers: signed.headers,
               body: part,
             })
 

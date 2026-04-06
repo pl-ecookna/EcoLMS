@@ -8,7 +8,10 @@ import { randomUUID } from "node:crypto"
 
 import { PostgresService } from "../db/postgres.service"
 import { RedisQueueService } from "../redis/redis.service"
-import { createS3UploadPartPresignedUrl } from "../s3/s3-presign"
+import {
+  createS3PutObjectPresignedUrl,
+  createS3UploadPartPresignedUrl,
+} from "../s3/s3-presign"
 
 const DEFAULT_S3_ENDPOINT = "https://s3.ru1.storage.beget.cloud"
 const DEFAULT_S3_BUCKET = "1bf1b61c108f-ecolms"
@@ -585,8 +588,8 @@ export class EcolmsStore {
         sourceFileId,
         bucket,
         storageKey,
-        partSize: 10 * 1024 * 1024,
-        maxParts: 1000,
+        partSize: Math.max(input.fileSize, 1),
+        maxParts: 1,
         uploadStatus: "initiated" as const,
       }
     })
@@ -608,7 +611,7 @@ export class EcolmsStore {
     return {
       uploadId,
       partNumber,
-      signedUrl: createS3UploadPartPresignedUrl({
+      signedUrl: createS3PutObjectPresignedUrl({
         endpoint,
         region,
         accessKeyId,
@@ -616,8 +619,6 @@ export class EcolmsStore {
         sessionToken,
         bucket: session.bucket,
         key: session.storageKey,
-        uploadId: session.s3UploadId,
-        partNumber,
       }),
       method: "PUT",
       headers: {},
