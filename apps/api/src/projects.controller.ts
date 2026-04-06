@@ -12,7 +12,7 @@ export class ProjectsController {
   constructor(private readonly store: EcolmsStore) {}
 
   @Post()
-  createProject(
+  async createProject(
     @Body()
     body: {
       githubRef: string
@@ -21,16 +21,16 @@ export class ProjectsController {
   ) {
     return {
       success: true,
-      data: this.store.createProject(body),
+      data: await this.store.createProject(body),
       error: null,
     }
   }
 
   @Get()
-  listProjects(@Query("page") page = "1", @Query("limit") limit = "25") {
+  async listProjects(@Query("page") page = "1", @Query("limit") limit = "25") {
     return {
       success: true,
-      data: this.store.listProjects(
+      data: await this.store.listProjects(
         toPositiveInt(page, 1),
         toPositiveInt(limit, 25)
       ),
@@ -39,37 +39,37 @@ export class ProjectsController {
   }
 
   @Get(":id")
-  getProject(@Param("id") id: string) {
+  async getProject(@Param("id") id: string) {
     return {
       success: true,
-      data: this.store.getProject(id),
+      data: await this.store.getProject(id),
       error: null,
     }
   }
 
   @Post(":id/start")
-  startProject(@Param("id") id: string) {
+  async startProject(@Param("id") id: string) {
     return {
       success: true,
-      data: this.store.startProject(id),
+      data: await this.store.startProject(id),
       error: null,
     }
   }
 
   @Get(":id/status")
-  getProjectStatus(@Param("id") id: string) {
+  async getProjectStatus(@Param("id") id: string) {
     return {
       success: true,
-      data: this.store.getProjectStatus(id),
+      data: await this.store.getProjectStatus(id),
       error: null,
     }
   }
 
   @Get(":id/download")
-  downloadProject(@Param("id") id: string) {
+  async downloadProject(@Param("id") id: string) {
     return {
       success: true,
-      data: this.store.downloadProject(id),
+      data: await this.store.downloadProject(id),
       error: null,
     }
   }

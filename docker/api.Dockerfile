@@ -26,4 +26,4 @@ COPY --from=build /app /app
 
 EXPOSE 3001
 
-CMD ["node", "apps/api/dist/main.js"]
+CMD ["pnpm", "--dir", "apps/api", "start"]

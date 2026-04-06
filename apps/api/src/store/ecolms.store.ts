@@ -1,5 +1,11 @@
-import { Injectable, NotFoundException, BadRequestException } from "@nestjs/common"
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common"
 import { randomUUID } from "node:crypto"
+
+import { PostgresService } from "../db/postgres.service"
 
 export const stageOrder = [
   "source_compiled",
@@ -139,16 +145,42 @@ function buildDrafts(name: string, topic: string): Record<StageId, string> {
   }
 }
 
-function buildStages(currentStage: StageId, status: ProjectStatus): ProjectStageRecord[] {
+function progressFor(stage: StageId, status: ProjectStatus) {
+  if (status === "completed") {
+    return 100
+  }
+
+  switch (stage) {
+    case "source_compiled":
+      return status === "draft" ? 0 : 18
+    case "course_outline":
+      return 44
+    case "course_content":
+      return 68
+    case "course_test":
+      return 88
+  }
+}
+
+function buildStages(
+  currentStage: StageId,
+  status: ProjectStatus,
+  updatedAt: string
+): ProjectStageRecord[] {
   const currentIndex = stageOrder.indexOf(currentStage)
 
   return stageOrder.map((stageId, index) => {
     const isCompleted = status === "completed" || index < currentIndex
     const isActive = index === currentIndex && status !== "completed"
+    const stageStatus: JobStatus = isCompleted
+      ? "done"
+      : isActive
+        ? "processing"
+        : "queued"
 
     return {
       id: stageId,
-      status: isCompleted ? "done" : isActive ? "processing" : "queued",
+      status: stageStatus,
       note:
         stageId === "source_compiled"
           ? "Нормализация исходников и удаление шума."
@@ -157,219 +189,165 @@ function buildStages(currentStage: StageId, status: ProjectStatus): ProjectStage
             : stageId === "course_content"
               ? "Разворачиваем материалы в обучающий текст."
               : "Формируем базовый тест из 10 вопросов.",
-      updatedAt: isCompleted || isActive ? "сегодня, 09:40" : "ожидает старта",
+      updatedAt: isCompleted || isActive ? updatedAt : "ожидает старта",
     }
   })
 }
 
-function buildArtifacts(projectId: string, stageDrafts: Record<StageId, string>): ArtifactRecord[] {
-  return stageOrder.flatMap((stageId) => {
-    const timestamp = nowIso()
-    return [
-      {
-        id: `${projectId}-${stageId}-md`,
-        projectId,
-        stage: stageId,
-        format: "md" as const,
-        storageKey: `artifacts/${projectId}/${stageId}.md`,
-        contentMd: stageDrafts[stageId],
-        contentJson: { stage: stageId, markdown: stageDrafts[stageId] },
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      },
-      {
-        id: `${projectId}-${stageId}-json`,
-        projectId,
-        stage: stageId,
-        format: "json" as const,
-        storageKey: `artifacts/${projectId}/${stageId}.json`,
-        contentMd: stageDrafts[stageId],
-        contentJson: { stage: stageId, markdown: stageDrafts[stageId] },
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      },
-    ]
-  })
+function parseJson<T>(value: unknown, fallback: T): T {
+  if (value == null) {
+    return fallback
+  }
+
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value) as T
+    } catch {
+      return fallback
+    }
+  }
+
+  return value as T
 }
 
-function makeSeedProject(options: {
-  id: string
-  prefix: string
-  githubRef: string
-  sourceSummary: string
-  topic: string
-  overview: string
-  status: ProjectStatus
-  currentStage: StageId
-  progress: number
-  files: number
-  updatedAt: string
-  logs: string[]
-}): ProjectDetailRecord {
-  const name = `${options.prefix} ${options.id.split("-").at(-1)}`
-  const stageDrafts = buildDrafts(name, options.topic)
-  const sourceFiles: SourceFileRecord[] = Array.from({ length: options.files }, (_, index) => ({
-    id: `${options.id}-file-${index + 1}`,
-    projectId: options.id,
-    originalName: `source-${index + 1}.${index % 2 === 0 ? "pdf" : "mp4"}`,
-    mimeType: index % 2 === 0 ? "application/pdf" : "video/mp4",
-    sizeBytes: 42_000_000,
-    storageKey: `source/${options.id}/source-${index + 1}`,
-    uploadStatus: "completed",
-    processingStatus: "done",
-    kind: index % 2 === 0 ? "document" : "video",
-    position: index + 1,
-    createdAt: nowIso(),
-  }))
+function isStageId(value: string): value is StageId {
+  return stageOrder.includes(value as StageId)
+}
+
+function mapSourceFileRow(row: Record<string, unknown>): SourceFileRecord {
+  return {
+    id: String(row.id),
+    projectId: String(row.project_id),
+    originalName: String(row.original_name),
+    mimeType: String(row.mime_type),
+    sizeBytes: Number(row.size_bytes),
+    storageKey: String(row.storage_key),
+    uploadStatus: String(row.upload_status) as UploadStatus,
+    processingStatus: String(row.processing_status) as JobStatus | "pending",
+    kind: String(row.kind),
+    position: Number(row.position),
+    createdAt: String(row.created_at),
+  }
+}
+
+function mapArtifactRow(row: Record<string, unknown>): ArtifactRecord {
+  return {
+    id: String(row.id),
+    projectId: String(row.project_id),
+    stage: String(row.stage) as StageId,
+    format: String(row.format) as ArtifactFormat,
+    storageKey: String(row.storage_key),
+    contentMd: String(row.content_md),
+    contentJson: parseJson<Record<string, unknown>>(row.content_json, {}),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  }
+}
+
+function mapJobRow(row: Record<string, unknown>): ProcessingJobRecord {
+  return {
+    id: String(row.id),
+    projectId: String(row.project_id),
+    stage: String(row.stage) as StageId,
+    status: String(row.status) as JobStatus,
+    payloadJson: parseJson<Record<string, unknown>>(row.payload_json, {}),
+    resultJson: parseJson<Record<string, unknown> | null>(row.result_json, null),
+    errorText: (row.error_text as string | null) ?? null,
+    startedAt: (row.started_at as string | null) ?? null,
+    finishedAt: (row.finished_at as string | null) ?? null,
+    createdAt: String(row.created_at),
+  }
+}
+
+function mapReviewRow(row: Record<string, unknown>): StageReviewRecord {
+  return {
+    id: String(row.id),
+    projectId: String(row.project_id),
+    stage: String(row.stage) as StageId,
+    sourceArtifactId: String(row.source_artifact_id),
+    editedArtifactId: String(row.edited_artifact_id),
+    approvedAt: String(row.approved_at),
+  }
+}
+
+function mapProjectRow(row: Record<string, unknown>, sourceFiles: SourceFileRecord[]): ProjectRecord {
+  const currentStage = String(row.current_stage)
+  const status = String(row.status)
+  const stageDrafts = parseJson<Record<StageId, string>>(row.stage_drafts, {
+    source_compiled: "",
+    course_outline: "",
+    course_content: "",
+    course_test: "",
+  })
 
   return {
-    id: options.id,
-    name,
-    githubRef: options.githubRef,
-    sourceSummary: options.sourceSummary,
-    status: options.status,
-    currentStage: options.currentStage,
-    progress: options.progress,
-    files: options.files,
-    updatedAt: options.updatedAt,
-    overview: options.overview,
+    id: String(row.id),
+    name: String(row.name),
+    githubRef: String(row.github_ref),
+    sourceSummary: String(row.source_summary),
+    status: status as ProjectStatus,
+    currentStage: (isStageId(currentStage) ? currentStage : "source_compiled") as StageId,
+    progress: Number(row.progress ?? 0),
+    files: Number(row.files ?? 0),
+    updatedAt: String(row.updated_at),
+    overview: String(row.overview ?? ""),
     stageDrafts,
-    stages: buildStages(options.currentStage, options.status),
-    logs: options.logs,
+    stages: buildStages(
+      isStageId(currentStage) ? currentStage : "source_compiled",
+      status as ProjectStatus,
+      String(row.updated_at)
+    ),
+    logs: parseJson<string[]>(row.logs, []),
     sourceFiles,
-    artifacts: buildArtifacts(options.id, stageDrafts),
-    jobs: [
-      {
-        id: `${options.id}-job-1`,
-        projectId: options.id,
-        stage: options.currentStage,
-        status: options.status === "completed" ? "done" : "processing",
-        payloadJson: { stage: options.currentStage },
-        resultJson: { status: options.status },
-        errorText: null,
-        startedAt: nowIso(),
-        finishedAt: options.status === "completed" ? nowIso() : null,
-        createdAt: nowIso(),
-      },
-    ],
-    reviews: [],
   }
+}
+
+function makeProjectId() {
+  return `eco-${randomUUID().slice(0, 8)}`
 }
 
 @Injectable()
 export class EcolmsStore {
-  private readonly projects = new Map<string, ProjectDetailRecord>()
-  private readonly uploads = new Map<string, UploadSessionRecord>()
+  constructor(private readonly db: PostgresService) {}
 
-  constructor() {
-    const seeds = [
-      makeSeedProject({
-        id: "eco-001",
-        prefix: "EcoGlass sales enablement",
-        githubRef: "github.com/pl-ecookna/EcoLMS/issues/218",
-        sourceSummary: "Вебинар + PDF для отдела продаж",
-        topic: "продаж светопрозрачных конструкций",
-        overview:
-          "Материал для менеджеров, которые ведут первые консультации и собирают потребности клиента.",
-        status: "awaiting_review",
-        currentStage: "course_outline",
-        progress: 68,
-        files: 3,
-        updatedAt: "сегодня, 10:18",
-        logs: [
-          "Загрузка завершена без ошибок.",
-          "Из видео извлечено аудио и отправлено в Whisper.",
-          "Черновик source_compiled ожидает ручной проверки.",
-        ],
-      }),
-      makeSeedProject({
-        id: "eco-002",
-        prefix: "Монтаж и сервис",
-        githubRef: "github.com/pl-ecookna/EcoLMS/issues/227",
-        sourceSummary: "DOC + видеозапись сервисного инструктажа",
-        topic: "сервиса и монтажа",
-        overview:
-          "Пошаговый разбор типовых работ и контрольных чек-листов для полевой команды.",
-        status: "processing",
-        currentStage: "course_content",
-        progress: 44,
-        files: 2,
-        updatedAt: "вчера, 16:05",
-        logs: [
-          "Очистка текста завершена.",
-          "Сформирован план курса на 6 разделов.",
-          "Генерация материалов сейчас в очереди.",
-        ],
-      }),
-      makeSeedProject({
-        id: "eco-003",
-        prefix: "Производство и качество",
-        githubRef: "github.com/pl-ecookna/EcoLMS/issues/233",
-        sourceSummary: "PPTX, PDF и стенограмма созвона",
-        topic: "производства и контроля качества",
-        overview:
-          "Материал для производственных мастеров с акцентом на контроль узлов и брак.",
-        status: "uploaded",
-        currentStage: "source_compiled",
-        progress: 18,
-        files: 4,
-        updatedAt: "вчера, 12:48",
-        logs: [
-          "Файлы загружены в Beget S3.",
-          "Проект готов к запуску обработки.",
-          "Ожидается подтверждение от пользователя.",
-        ],
-      }),
-      makeSeedProject({
-        id: "eco-004",
-        prefix: "Коммерческое предложение",
-        githubRef: "github.com/pl-ecookna/EcoLMS/issues/240",
-        sourceSummary: "PDF КП и дополнительная презентация",
-        topic: "подготовки коммерческих предложений",
-        overview:
-          "Пакет материалов для ускоренной подготовки КП на основе реальных документов заказчика.",
-        status: "completed",
-        currentStage: "course_test",
-        progress: 100,
-        files: 5,
-        updatedAt: "понедельник, 09:30",
-        logs: [
-          "Все этапы подтверждены.",
-          "Итоговый пакет сформирован.",
-          "Артефакты доступны для скачивания.",
-        ],
-      }),
-    ]
-
-    for (const project of seeds) {
-      this.projects.set(project.id, project)
-    }
-  }
-
-  health() {
+  async health() {
+    const stats = await this.db.stats()
     return {
       success: true,
       data: {
         status: "ok",
-        projects: this.projects.size,
-        uploads: this.uploads.size,
+        mode: "postgres",
+        projects: stats.projects,
+        uploads: stats.uploads,
       },
       error: null,
     }
   }
 
-  listProjects(page: number, limit: number) {
+  async listProjects(page: number, limit: number) {
     const safeLimit = Math.max(1, Math.min(limit, 25))
     const safePage = Math.max(1, page)
-    const items = [...this.projects.values()].sort((a, b) =>
-      a.updatedAt < b.updatedAt ? 1 : -1
+    const offset = (safePage - 1) * safeLimit
+
+    const projectsResult = await this.db.query<Record<string, unknown>>(
+      `
+      select *
+      from projects
+      order by updated_at desc
+      limit $1 offset $2
+    `,
+      [safeLimit, offset]
     )
-    const total = items.length
-    const start = (safePage - 1) * safeLimit
-    const pageItems = items.slice(start, start + safeLimit)
+
+    const total = await this.db.countProjects()
+    const items: ProjectRecord[] = []
+    for (const row of projectsResult.rows) {
+      const sourceFiles = await this.listSourceFiles(String(row.id))
+      items.push(mapProjectRow(row, sourceFiles))
+    }
 
     return {
-      items: pageItems.map((project) => this.toProjectSummary(project)),
+      items,
       total,
       page: safePage,
       limit: safeLimit,
@@ -377,56 +355,105 @@ export class EcolmsStore {
     }
   }
 
-  getProject(id: string) {
-    return this.ensureProject(id)
+  async getProject(id: string) {
+    return this.loadProjectDetail(id)
   }
 
-  createProject(input: { githubRef: string; note?: string }) {
-    const id = `eco-${String(this.projects.size + 1).padStart(3, "0")}`
-    const name = `${makeNameFromGithubRef(input.githubRef)} ${String(this.projects.size + 1).padStart(2, "0")}`
+  async createProject(input: { githubRef: string; note?: string }) {
+    const id = makeProjectId()
+    const name = `${makeNameFromGithubRef(input.githubRef)} ${id.slice(-4)}`
+    const sourceSummary = input.note ?? "Новый проект, ожидающий загрузки материалов"
     const stageDrafts = buildDrafts(name, input.note ?? "нового обучающего курса")
+    const now = nowIso()
 
-    const project: ProjectDetailRecord = {
-      id,
-      name,
-      githubRef: input.githubRef,
-      sourceSummary: input.note ?? "Новый проект, ожидающий загрузки материалов",
-      status: "draft",
-      currentStage: "source_compiled",
-      progress: 0,
-      files: 0,
-      updatedAt: nowIso(),
-      overview:
-        "Создан новый проект. После загрузки файлов можно запускать обработку.",
-      stageDrafts,
-      stages: buildStages("source_compiled", "draft"),
-      logs: ["Проект создан из GitHub-источника."],
-      sourceFiles: [],
-      artifacts: buildArtifacts(id, stageDrafts),
-      jobs: [],
-      reviews: [],
-    }
+    await this.db.transaction(async (client) => {
+      await client.query(
+        `
+        insert into projects (
+          id, name, github_ref, source_summary, status, current_stage, progress, files, updated_at, overview, stage_drafts, logs
+        ) values (
+          $1, $2, $3, $4, 'draft', 'source_compiled', 0, 0, $5::timestamptz,
+          $6, $7::jsonb, $8::jsonb
+        )
+      `,
+        [
+          id,
+          name,
+          input.githubRef,
+          sourceSummary,
+          now,
+          "Создан новый проект. После загрузки файлов можно запускать обработку.",
+          JSON.stringify(stageDrafts),
+          JSON.stringify(["Проект создан из GitHub-источника."]),
+        ]
+      )
 
-    this.projects.set(id, project)
-    return this.toProjectSummary(project)
+      for (const stage of stageOrder) {
+        await client.query(
+          `
+          insert into artifacts (
+            id, project_id, stage, format, storage_key, content_md, content_json, created_at, updated_at
+          ) values
+          ($1, $2, $3, 'md', $4, $5, $6::jsonb, now(), now()),
+          ($7, $8, $9, 'json', $10, $11, $12::jsonb, now(), now())
+        `,
+          [
+            `${id}-${stage}-md`,
+            id,
+            stage,
+            `artifacts/${id}/${stage}.md`,
+            stageDrafts[stage],
+            JSON.stringify({ stage, markdown: stageDrafts[stage] }),
+            `${id}-${stage}-json`,
+            id,
+            stage,
+            `artifacts/${id}/${stage}.json`,
+            stageDrafts[stage],
+            JSON.stringify({ stage, markdown: stageDrafts[stage] }),
+          ]
+        )
+      }
+    })
+
+    return this.getProject(id)
   }
 
-  startProject(id: string) {
-    const project = this.ensureProject(id)
-
+  async startProject(id: string) {
+    const project = await this.loadProjectDetail(id)
     if (project.sourceFiles.length === 0) {
       throw new BadRequestException("Проект нельзя запустить без загруженных файлов")
     }
 
-    const job = this.createJob(project, project.currentStage, "processing")
-    project.status = "processing"
-    project.logs = [`Запуск обработки для этапа ${project.currentStage}.`, ...project.logs].slice(0, 10)
-    project.updatedAt = nowIso()
-    return { project: this.toProjectSummary(project), job }
+    const job = await this.db.transaction(async (client) => {
+      const created = await client.query<Record<string, unknown>>(
+        `
+        insert into processing_jobs (
+          id, project_id, stage, status, payload_json, result_json, error_text, started_at, finished_at, created_at
+        ) values (
+          $1, $2, $3, 'processing', $4::jsonb, null, null, now(), null, now()
+        )
+        returning *
+      `,
+        [randomUUID(), id, project.currentStage, JSON.stringify({ stage: project.currentStage })]
+      )
+
+      await client.query(
+        `
+        update projects
+        set status = 'processing', updated_at = now(), logs = $2::jsonb
+        where id = $1
+      `,
+        [id, JSON.stringify([`Запуск обработки для этапа ${project.currentStage}.`, ...project.logs].slice(0, 10))]
+      )
+
+      return mapJobRow(created.rows[0] ?? {})
+    })
+
+    return { project: await this.getProject(id), job }
   }
 
-  getProjectStatus(id: string) {
-    const project = this.ensureProject(id)
+  async getProjectStatus(id: string) {
+    const project = await this.loadProjectSummary(id)
     return {
       id: project.id,
       status: project.status,
@@ -436,82 +463,122 @@ export class EcolmsStore {
     }
   }
 
-  initUpload(projectId: string, input: {
-    fileName: string
-    fileSize: number
-    mimeType: string
-    kind: string
-  }) {
-    const project = this.ensureProject(projectId)
-
-    if (project.sourceFiles.length >= MAX_FILES_PER_PROJECT) {
-      throw new BadRequestException("Превышен лимит файлов в проекте")
+  async initUpload(
+    projectId: string,
+    input: {
+      fileName: string
+      fileSize: number
+      mimeType: string
+      kind: string
     }
-
+  ) {
     if (input.fileSize > MAX_FILE_SIZE_BYTES) {
       throw new BadRequestException("Превышен лимит размера файла")
     }
 
-    const sourceFileId = randomUUID()
-    const uploadId = randomUUID()
-    const storageKey = `source/${projectId}/${sourceFileId}/${input.fileName}`
-    const bucket = process.env.S3_BUCKET ?? "ecolms"
+    return this.db.transaction(async (client) => {
+      const projectResult = await client.query<Record<string, unknown>>(
+        `select * from projects where id = $1 for update`,
+        [projectId]
+      )
 
-    const sourceFile: SourceFileRecord = {
-      id: sourceFileId,
-      projectId,
-      originalName: input.fileName,
-      mimeType: input.mimeType,
-      sizeBytes: input.fileSize,
-      storageKey,
-      uploadStatus: "initiated",
-      processingStatus: "pending",
-      kind: input.kind,
-      position: project.sourceFiles.length + 1,
-      createdAt: nowIso(),
-    }
+      if (projectResult.rowCount === 0) {
+        throw new NotFoundException("Проект не найден")
+      }
 
-    project.sourceFiles.push(sourceFile)
-    project.files = project.sourceFiles.length
-    project.status = "uploaded"
-    project.updatedAt = nowIso()
-    project.logs = [`Инициализирован upload для ${input.fileName}.`, ...project.logs].slice(0, 10)
+      const project = projectResult.rows[0]
+      const filesResult = await client.query<{ count: string }>(
+        `select count(*)::text as count from source_files where project_id = $1`,
+        [projectId]
+      )
 
-    const session: UploadSessionRecord = {
-      id: uploadId,
-      projectId,
-      sourceFileId,
-      s3UploadId: randomUUID(),
-      status: "initiated",
-      createdAt: nowIso(),
-      completedAt: null,
-      bucket,
-      storageKey,
-      originalName: input.fileName,
-      mimeType: input.mimeType,
-      sizeBytes: input.fileSize,
-      kind: input.kind,
-    }
+      const currentCount = Number(filesResult.rows[0]?.count ?? 0)
+      if (currentCount >= MAX_FILES_PER_PROJECT) {
+        throw new BadRequestException("Превышен лимит файлов в проекте")
+      }
 
-    this.uploads.set(uploadId, session)
+      const sourceFileId = randomUUID()
+      const uploadId = randomUUID()
+      const storageKey = `source/${projectId}/${sourceFileId}/${input.fileName}`
+      const bucket = process.env.S3_BUCKET ?? "ecolms"
+      const s3UploadId = randomUUID()
 
-    return {
-      uploadId,
-      projectId,
-      sourceFileId,
-      bucket,
-      storageKey,
-      partSize: 10 * 1024 * 1024,
-      maxParts: 1000,
-      uploadStatus: session.status,
-    }
+      await client.query(
+        `
+        insert into source_files (
+          id, project_id, original_name, mime_type, size_bytes, storage_key, upload_status, processing_status, kind, position, created_at
+        ) values (
+          $1, $2, $3, $4, $5, $6, 'initiated', 'pending', $7, $8, now()
+        )
+      `,
+        [
+          sourceFileId,
+          projectId,
+          input.fileName,
+          input.mimeType,
+          input.fileSize,
+          storageKey,
+          input.kind,
+          currentCount + 1,
+        ]
+      )
+
+      await client.query(
+        `
+        insert into upload_sessions (
+          id, project_id, source_file_id, s3_upload_id, status, created_at, completed_at, bucket, storage_key, original_name, mime_type, size_bytes, kind
+        ) values (
+          $1, $2, $3, $4, 'initiated', now(), null, $5, $6, $7, $8, $9, $10
+        )
+      `,
+        [
+          uploadId,
+          projectId,
+          sourceFileId,
+          s3UploadId,
+          bucket,
+          storageKey,
+          input.fileName,
+          input.mimeType,
+          input.fileSize,
+          input.kind,
+        ]
+      )
+
+      await client.query(
+        `
+        update projects
+        set
+          files = $2,
+          status = 'uploaded',
+          updated_at = now(),
+          logs = $3::jsonb
+        where id = $1
+      `,
+        [
+          projectId,
+          currentCount + 1,
+          JSON.stringify([`Инициализирован upload для ${input.fileName}.`, ...(parseJson<string[]>(project.logs, []))].slice(0, 10)),
+        ]
+      )
+
+      return {
+        uploadId,
+        projectId,
+        sourceFileId,
+        bucket,
+        storageKey,
+        partSize: 10 * 1024 * 1024,
+        maxParts: 1000,
+        uploadStatus: "initiated" as const,
+      }
+    })
   }
 
-  signUploadPart(uploadId: string, partNumber: number) {
-    const session = this.ensureUpload(uploadId)
+  async signUploadPart(uploadId: string, partNumber: number) {
+    const session = await this.getUploadSession(uploadId)
+    await this.db.query(`update upload_sessions set status = 'uploading' where id = $1`, [uploadId])
     const endpoint = process.env.S3_ENDPOINT ?? "https://s3.example.invalid"
-
-    session.status = "uploading"
 
     return {
       uploadId,
@@ -524,211 +591,339 @@ export class EcolmsStore {
     }
   }
 
-  completeUpload(uploadId: string) {
-    const session = this.ensureUpload(uploadId)
-    const project = this.ensureProject(session.projectId)
-    const sourceFile = project.sourceFiles.find((file) => file.id === session.sourceFileId)
+  async completeUpload(uploadId: string) {
+    const session = await this.getUploadSession(uploadId)
 
-    if (!sourceFile) {
-      throw new NotFoundException("Файл не найден")
-    }
-
-    sourceFile.uploadStatus = "completed"
-    sourceFile.processingStatus = "done"
-    session.status = "completed"
-    session.completedAt = nowIso()
-    project.status = "uploaded"
-    project.updatedAt = nowIso()
-    project.logs = [`Загрузка ${sourceFile.originalName} завершена.`, ...project.logs].slice(0, 10)
+    await this.db.transaction(async (client) => {
+      await client.query(`update upload_sessions set status = 'completed', completed_at = now() where id = $1`, [
+        uploadId,
+      ])
+      await client.query(
+        `update source_files set upload_status = 'completed', processing_status = 'done' where id = $1`,
+        [session.sourceFileId]
+      )
+      await client.query(
+        `
+        update projects
+        set
+          status = 'uploaded',
+          updated_at = now(),
+          logs = $2::jsonb
+        where id = $1
+      `,
+        [
+          session.projectId,
+          JSON.stringify([
+            `Загрузка ${session.originalName} завершена.`,
+            ...(await this.getProjectLogs(session.projectId)),
+          ].slice(0, 10)),
+        ]
+      )
+    })
 
     return {
       uploadId,
-      status: session.status,
+      status: "completed" as const,
       storageKey: session.storageKey,
-      completedAt: session.completedAt,
+      completedAt: nowIso(),
     }
   }
 
-  abortUpload(uploadId: string) {
-    const session = this.ensureUpload(uploadId)
-    const project = this.ensureProject(session.projectId)
-    const sourceFile = project.sourceFiles.find((file) => file.id === session.sourceFileId)
+  async abortUpload(uploadId: string) {
+    const session = await this.getUploadSession(uploadId)
+    await this.db.transaction(async (client) => {
+      await client.query(`update upload_sessions set status = 'aborted' where id = $1`, [uploadId])
+      await client.query(`update source_files set upload_status = 'aborted' where id = $1`, [
+        session.sourceFileId,
+      ])
+      await client.query(`update projects set updated_at = now() where id = $1`, [session.projectId])
+    })
 
-    if (sourceFile) {
-      sourceFile.uploadStatus = "aborted"
-    }
-
-    session.status = "aborted"
-    project.updatedAt = nowIso()
     return {
       uploadId,
-      status: session.status,
+      status: "aborted" as const,
     }
   }
 
-  listArtifacts(projectId: string) {
-    const project = this.ensureProject(projectId)
-    return project.artifacts
+  async listArtifacts(projectId: string) {
+    const result = await this.db.query<Record<string, unknown>>(
+      `select * from artifacts where project_id = $1 order by stage, format`,
+      [projectId]
+    )
+    return result.rows.map(mapArtifactRow)
   }
 
-  getArtifact(projectId: string, artifactId: string) {
-    const project = this.ensureProject(projectId)
-    const artifact = project.artifacts.find((entry) => entry.id === artifactId)
-    if (!artifact) {
+  async getArtifact(projectId: string, artifactId: string) {
+    const result = await this.db.query<Record<string, unknown>>(
+      `select * from artifacts where project_id = $1 and id = $2 limit 1`,
+      [projectId, artifactId]
+    )
+
+    const row = result.rows[0]
+    if (!row) {
       throw new NotFoundException("Артефакт не найден")
     }
 
-    return artifact
+    return mapArtifactRow(row)
   }
 
-  updateArtifact(projectId: string, artifactId: string, contentMd: string) {
-    const project = this.ensureProject(projectId)
-    const artifact = this.getArtifact(projectId, artifactId)
-    artifact.contentMd = contentMd
-    artifact.contentJson = { stage: artifact.stage, markdown: contentMd }
-    artifact.updatedAt = nowIso()
-    project.logs = [`Сохранена последняя версия этапа ${artifact.stage}.`, ...project.logs].slice(0, 10)
-    project.updatedAt = nowIso()
+  async updateArtifact(projectId: string, artifactId: string, contentMd: string) {
+    const artifact = await this.getArtifact(projectId, artifactId)
 
-    return artifact
+    await this.db.query(
+      `
+      update artifacts
+      set content_md = $3, content_json = $4::jsonb, updated_at = now()
+      where project_id = $1 and id = $2
+    `,
+      [
+        projectId,
+        artifactId,
+        contentMd,
+        JSON.stringify({ stage: artifact.stage, markdown: contentMd }),
+      ]
+    )
+
+    await this.appendProjectLog(projectId, `Сохранена последняя версия этапа ${artifact.stage}.`)
+    return this.getArtifact(projectId, artifactId)
   }
 
-  approveArtifact(projectId: string, artifactId: string) {
-    const project = this.ensureProject(projectId)
-    const artifact = this.getArtifact(projectId, artifactId)
-    const existingReview = project.reviews.find((review) => review.stage === artifact.stage)
-    const review: StageReviewRecord = existingReview ?? {
-      id: randomUUID(),
-      projectId,
-      stage: artifact.stage,
-      sourceArtifactId: artifact.id,
-      editedArtifactId: artifact.id,
-      approvedAt: nowIso(),
-    }
+  async approveArtifact(projectId: string, artifactId: string) {
+    const artifact = await this.getArtifact(projectId, artifactId)
+    const project = await this.loadProjectSummary(projectId)
+    const nextStage = stageOrder[stageOrder.indexOf(artifact.stage) + 1]
+    const reviewId = randomUUID()
+    const now = nowIso()
 
-    review.approvedAt = nowIso()
-    review.editedArtifactId = artifact.id
-    review.sourceArtifactId = artifact.id
+    await this.db.transaction(async (client) => {
+      await client.query(
+        `
+        insert into stage_reviews (
+          id, project_id, stage, source_artifact_id, edited_artifact_id, approved_at
+        ) values (
+          $1, $2, $3, $4, $5, now()
+        )
+        on conflict (project_id, stage) do update
+        set source_artifact_id = excluded.source_artifact_id,
+            edited_artifact_id = excluded.edited_artifact_id,
+            approved_at = excluded.approved_at
+      `,
+        [reviewId, projectId, artifact.stage, artifact.id, artifact.id]
+      )
 
-    if (!existingReview) {
-      project.reviews.push(review)
-    }
+      if (nextStage) {
+        await client.query(
+          `
+          update projects
+          set
+            current_stage = $2,
+            status = 'processing',
+            progress = $3,
+            updated_at = now(),
+            logs = $4::jsonb
+          where id = $1
+        `,
+          [
+            projectId,
+            nextStage,
+            progressFor(nextStage, "processing"),
+            JSON.stringify([`Этап ${artifact.stage} подтвержден.`, ...(project.logs ?? [])].slice(0, 10)),
+          ]
+        )
 
-    const stageIndex = stageOrder.indexOf(artifact.stage)
-    const nextStage = stageOrder[stageIndex + 1]
-    const currentStageRecord = project.stages.find((entry) => entry.id === artifact.stage)
-    if (currentStageRecord) {
-      currentStageRecord.status = "done"
-      currentStageRecord.updatedAt = "только что"
-    }
-
-    if (nextStage) {
-      project.currentStage = nextStage
-      project.status = "processing"
-      const nextStageRecord = project.stages.find((entry) => entry.id === nextStage)
-      if (nextStageRecord) {
-        nextStageRecord.status = "processing"
-        nextStageRecord.updatedAt = "ожидает генерации"
+        await client.query(
+          `
+          insert into processing_jobs (
+            id, project_id, stage, status, payload_json, result_json, error_text, started_at, finished_at, created_at
+          ) values (
+            $1, $2, $3, 'queued', $4::jsonb, null, null, null, null, now()
+          )
+        `,
+          [randomUUID(), projectId, nextStage, JSON.stringify({ stage: nextStage, trigger: "approval" })]
+        )
+      } else {
+        await client.query(
+          `
+          update projects
+          set
+            current_stage = $2,
+            status = 'completed',
+            progress = 100,
+            updated_at = now(),
+            logs = $4::jsonb
+          where id = $1
+        `,
+          [
+            projectId,
+            artifact.stage,
+            100,
+            JSON.stringify([`Этап ${artifact.stage} подтвержден.`, ...(project.logs ?? [])].slice(0, 10)),
+          ]
+        )
       }
-      this.createJob(project, nextStage, "queued")
-    } else {
-      project.status = "completed"
-      project.progress = 100
-    }
-
-    project.updatedAt = nowIso()
-    project.logs = [`Этап ${artifact.stage} подтвержден.`, ...project.logs].slice(0, 10)
+    })
 
     return {
-      review,
+      review: {
+        id: reviewId,
+        projectId,
+        stage: artifact.stage,
+        sourceArtifactId: artifact.id,
+        editedArtifactId: artifact.id,
+        approvedAt: now,
+      },
       nextStage: nextStage ?? null,
-      project: this.toProjectSummary(project),
+      project: await this.getProject(projectId),
     }
   }
 
-  listJobs(projectId: string) {
-    const project = this.ensureProject(projectId)
-    return project.jobs
+  async listJobs(projectId: string) {
+    const result = await this.db.query<Record<string, unknown>>(
+      `select * from processing_jobs where project_id = $1 order by created_at desc`,
+      [projectId]
+    )
+    return result.rows.map(mapJobRow)
   }
 
-  retryJob(projectId: string, jobId: string) {
-    const project = this.ensureProject(projectId)
-    const job = project.jobs.find((entry) => entry.id === jobId)
-    if (!job) {
+  async retryJob(projectId: string, jobId: string) {
+    const result = await this.db.query<Record<string, unknown>>(
+      `select * from processing_jobs where project_id = $1 and id = $2 limit 1`,
+      [projectId, jobId]
+    )
+    const row = result.rows[0]
+    if (!row) {
       throw new NotFoundException("Job не найден")
     }
 
-    job.status = "processing"
-    job.startedAt = nowIso()
-    job.finishedAt = null
-    job.errorText = null
-    project.status = "processing"
-    project.updatedAt = nowIso()
-    project.logs = [`Повторный запуск job ${job.stage}.`, ...project.logs].slice(0, 10)
+    await this.db.transaction(async (client) => {
+      await client.query(
+        `
+        update processing_jobs
+        set status = 'processing', started_at = now(), finished_at = null, error_text = null
+        where id = $1
+      `,
+        [jobId]
+      )
+      await client.query(
+        `
+        update projects
+        set status = 'processing', updated_at = now(), logs = $2::jsonb
+        where id = $1
+      `,
+        [projectId, JSON.stringify([`Повторный запуск job ${String(row.stage)}.`, ...(await this.getProjectLogs(projectId))].slice(0, 10))]
+      )
+    })
 
-    return job
+    return this.getJob(projectId, jobId)
   }
 
-  downloadProject(projectId: string) {
-    const project = this.ensureProject(projectId)
-    return project.artifacts.map((artifact) => ({
+  async downloadProject(projectId: string) {
+    const artifacts: ArtifactRecord[] = await this.listArtifacts(projectId)
+    const endpoint = process.env.S3_ENDPOINT ?? "https://s3.example.invalid"
+    const bucket = process.env.S3_BUCKET ?? "ecolms"
+
+    return artifacts.map((artifact) => ({
       id: artifact.id,
       stage: artifact.stage,
       format: artifact.format,
       storageKey: artifact.storageKey,
-      downloadUrl: `${process.env.S3_ENDPOINT ?? "https://s3.example.invalid"}/${process.env.S3_BUCKET ?? "ecolms"}/${artifact.storageKey}`,
+      downloadUrl: `${endpoint}/${bucket}/${artifact.storageKey}`,
     }))
   }
 
-  private createJob(project: ProjectDetailRecord, stage: StageId, status: JobStatus) {
-    const job: ProcessingJobRecord = {
-      id: randomUUID(),
-      projectId: project.id,
-      stage,
-      status,
-      payloadJson: { stage },
-      resultJson: null,
-      errorText: null,
-      startedAt: status === "queued" ? null : nowIso(),
-      finishedAt: null,
-      createdAt: nowIso(),
-    }
-    project.jobs.push(job)
-    return job
-  }
-
-  private ensureProject(projectId: string) {
-    const project = this.projects.get(projectId)
-    if (!project) {
+  private async loadProjectSummary(id: string) {
+    const result = await this.db.query<Record<string, unknown>>(`select * from projects where id = $1 limit 1`, [id])
+    const row = result.rows[0]
+    if (!row) {
       throw new NotFoundException("Проект не найден")
     }
-    return project
+    const sourceFiles = await this.listSourceFiles(id)
+    return mapProjectRow(row, sourceFiles)
   }
 
-  private ensureUpload(uploadId: string) {
-    const upload = this.uploads.get(uploadId)
-    if (!upload) {
+  private async loadProjectDetail(id: string) {
+    const project = await this.loadProjectSummary(id)
+    const [artifacts, jobs, reviews] = await Promise.all([
+      this.listArtifacts(id),
+      this.listJobs(id),
+      this.listReviews(id),
+    ])
+    return {
+      ...project,
+      artifacts,
+      jobs,
+      reviews,
+    }
+  }
+
+  private async listSourceFiles(projectId: string) {
+    const result = await this.db.query<Record<string, unknown>>(
+      `select * from source_files where project_id = $1 order by position asc`,
+      [projectId]
+    )
+    return result.rows.map(mapSourceFileRow)
+  }
+
+  private async listReviews(projectId: string) {
+    const result = await this.db.query<Record<string, unknown>>(
+      `select * from stage_reviews where project_id = $1 order by approved_at desc`,
+      [projectId]
+    )
+    return result.rows.map(mapReviewRow)
+  }
+
+  private async getUploadSession(uploadId: string) {
+    const result = await this.db.query<Record<string, unknown>>(
+      `select * from upload_sessions where id = $1 limit 1`,
+      [uploadId]
+    )
+    const row = result.rows[0]
+    if (!row) {
       throw new NotFoundException("Upload session не найдена")
     }
-    return upload
+    return {
+      id: String(row.id),
+      projectId: String(row.project_id),
+      sourceFileId: String(row.source_file_id),
+      s3UploadId: String(row.s3_upload_id),
+      status: String(row.status) as UploadStatus,
+      createdAt: String(row.created_at),
+      completedAt: (row.completed_at as string | null) ?? null,
+      bucket: String(row.bucket),
+      storageKey: String(row.storage_key),
+      originalName: String(row.original_name),
+      mimeType: String(row.mime_type),
+      sizeBytes: Number(row.size_bytes),
+      kind: String(row.kind),
+    } satisfies UploadSessionRecord
   }
 
-  private toProjectSummary(project: ProjectDetailRecord): ProjectRecord {
-    return {
-      id: project.id,
-      name: project.name,
-      githubRef: project.githubRef,
-      sourceSummary: project.sourceSummary,
-      status: project.status,
-      currentStage: project.currentStage,
-      progress: project.progress,
-      files: project.files,
-      updatedAt: project.updatedAt,
-      overview: project.overview,
-      stageDrafts: project.stageDrafts,
-      stages: project.stages,
-      logs: project.logs,
-      sourceFiles: project.sourceFiles,
+  private async getJob(projectId: string, jobId: string) {
+    const result = await this.db.query<Record<string, unknown>>(
+      `select * from processing_jobs where project_id = $1 and id = $2 limit 1`,
+      [projectId, jobId]
+    )
+    const row = result.rows[0]
+    if (!row) {
+      throw new NotFoundException("Job не найден")
     }
+    return mapJobRow(row)
+  }
+
+  private async getProjectLogs(projectId: string) {
+    const result = await this.db.query<Record<string, unknown>>(
+      `select logs from projects where id = $1 limit 1`,
+      [projectId]
+    )
+    const row = result.rows[0]
+    return parseJson<string[]>(row?.logs, [])
+  }
+
+  private async appendProjectLog(projectId: string, message: string) {
+    const logs = [message, ...(await this.getProjectLogs(projectId))].slice(0, 10)
+    await this.db.query(
+      `update projects set logs = $2::jsonb, updated_at = now() where id = $1`,
+      [projectId, JSON.stringify(logs)]
+    )
   }
 }

@@ -29,4 +29,4 @@ COPY --from=build /app /app
 
 EXPOSE 3000
 
-CMD ["pnpm", "--dir", "apps/web", "start", "--", "-H", "0.0.0.0", "-p", "3000"]
+CMD ["pnpm", "--dir", "apps/web", "start"]

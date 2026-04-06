@@ -7,6 +7,7 @@ import { JobsController } from "./jobs.controller"
 import { ProjectsController } from "./projects.controller"
 import { UploadsController } from "./uploads.controller"
 import { AppService } from "./app.service"
+import { PostgresService } from "./db/postgres.service"
 import { EcolmsStore } from "./store/ecolms.store"
 
 @Module({
@@ -23,6 +24,6 @@ import { EcolmsStore } from "./store/ecolms.store"
     ArtifactsController,
     JobsController,
   ],
-  providers: [AppService, EcolmsStore],
+  providers: [AppService, PostgresService, EcolmsStore],
 })
 export class AppModule {}

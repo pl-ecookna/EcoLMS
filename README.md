@@ -41,7 +41,7 @@ EcoLMS — внутренний веб-инструмент для подгот�
 ## Рекомендуемый стек
 
 - Frontend: Next.js, React, TypeScript, shadcn/ui;
-- Backend API: NestJS, TypeScript;
+- Backend API: NestJS, TypeScript, PostgreSQL-backed persistence;
 - Worker: Python;
 - Transcription service: Python + `openai/whisper`;
 - Queue: Redis + BullMQ;

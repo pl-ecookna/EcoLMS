@@ -7,7 +7,7 @@ export class UploadsController {
   constructor(private readonly store: EcolmsStore) {}
 
   @Post("projects/:id/uploads/init")
-  initUpload(
+  async initUpload(
     @Param("id") id: string,
     @Body()
     body: {
@@ -19,13 +19,13 @@ export class UploadsController {
   ) {
     return {
       success: true,
-      data: this.store.initUpload(id, body),
+      data: await this.store.initUpload(id, body),
       error: null,
     }
   }
 
   @Post("uploads/:uploadId/parts/sign")
-  signUploadPart(
+  async signUploadPart(
     @Param("uploadId") uploadId: string,
     @Body()
     body: {
@@ -34,25 +34,25 @@ export class UploadsController {
   ) {
     return {
       success: true,
-      data: this.store.signUploadPart(uploadId, Number(body.partNumber)),
+      data: await this.store.signUploadPart(uploadId, Number(body.partNumber)),
       error: null,
     }
   }
 
   @Post("uploads/:uploadId/complete")
-  completeUpload(@Param("uploadId") uploadId: string) {
+  async completeUpload(@Param("uploadId") uploadId: string) {
     return {
       success: true,
-      data: this.store.completeUpload(uploadId),
+      data: await this.store.completeUpload(uploadId),
       error: null,
     }
   }
 
   @Post("uploads/:uploadId/abort")
-  abortUpload(@Param("uploadId") uploadId: string) {
+  async abortUpload(@Param("uploadId") uploadId: string) {
     return {
       success: true,
-      data: this.store.abortUpload(uploadId),
+      data: await this.store.abortUpload(uploadId),
       error: null,
     }
   }

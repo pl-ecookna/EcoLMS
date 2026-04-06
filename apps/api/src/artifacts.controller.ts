@@ -7,28 +7,28 @@ export class ArtifactsController {
   constructor(private readonly store: EcolmsStore) {}
 
   @Get("projects/:id/artifacts")
-  listArtifacts(@Param("id") id: string) {
+  async listArtifacts(@Param("id") id: string) {
     return {
       success: true,
-      data: this.store.listArtifacts(id),
+      data: await this.store.listArtifacts(id),
       error: null,
     }
   }
 
   @Get("projects/:id/artifacts/:artifactId")
-  getArtifact(
+  async getArtifact(
     @Param("id") id: string,
     @Param("artifactId") artifactId: string
   ) {
     return {
       success: true,
-      data: this.store.getArtifact(id, artifactId),
+      data: await this.store.getArtifact(id, artifactId),
       error: null,
     }
   }
 
   @Put("projects/:id/artifacts/:artifactId")
-  updateArtifact(
+  async updateArtifact(
     @Param("id") id: string,
     @Param("artifactId") artifactId: string,
     @Body()
@@ -38,19 +38,19 @@ export class ArtifactsController {
   ) {
     return {
       success: true,
-      data: this.store.updateArtifact(id, artifactId, body.contentMd),
+      data: await this.store.updateArtifact(id, artifactId, body.contentMd),
       error: null,
     }
   }
 
   @Post("projects/:id/artifacts/:artifactId/approve")
-  approveArtifact(
+  async approveArtifact(
     @Param("id") id: string,
     @Param("artifactId") artifactId: string
   ) {
     return {
       success: true,
-      data: this.store.approveArtifact(id, artifactId),
+      data: await this.store.approveArtifact(id, artifactId),
       error: null,
     }
   }
