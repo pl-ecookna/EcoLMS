@@ -28,10 +28,19 @@ function canonicalQuery(params: Record<string, string>) {
   return Object.entries(params)
     .map(([key, value]) => [encodeRfc3986(key), encodeRfc3986(value)] as const)
     .sort(([leftKey, leftValue], [rightKey, rightValue]) => {
-      if (leftKey === rightKey) {
-        return leftValue.localeCompare(rightValue)
+      if (leftKey < rightKey) {
+        return -1
       }
-      return leftKey.localeCompare(rightKey)
+      if (leftKey > rightKey) {
+        return 1
+      }
+      if (leftValue < rightValue) {
+        return -1
+      }
+      if (leftValue > rightValue) {
+        return 1
+      }
+      return 0
     })
     .map(([key, value]) => `${key}=${value}`)
     .join("&")
@@ -115,6 +124,10 @@ export function createS3UploadPartPresignedUrl(input: S3PresignPartInput) {
   const signingKey = buildSigningKey(input.secretAccessKey, dateStamp, input.region)
   const signature = createHmac("sha256", signingKey).update(stringToSign, "utf8").digest("hex")
 
-  const signedQuery = `${canonicalQueryString}&X-Amz-Signature=${signature}`
+  const operationQuery = canonicalQuery({
+    uploadId: input.uploadId,
+    partNumber: String(input.partNumber),
+  })
+  const signedQuery = `${operationQuery}&${canonicalQueryString}&X-Amz-Signature=${signature}`
   return `${endpointUrl.origin}${canonicalUri}?${signedQuery}`
 }
