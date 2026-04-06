@@ -1,15 +1,18 @@
 import {
   BadRequestException,
   Injectable,
+  InternalServerErrorException,
   NotFoundException,
 } from "@nestjs/common"
 import { randomUUID } from "node:crypto"
 
 import { PostgresService } from "../db/postgres.service"
 import { RedisQueueService } from "../redis/redis.service"
+import { createS3UploadPartPresignedUrl } from "../s3/s3-presign"
 
 const DEFAULT_S3_ENDPOINT = "https://s3.ru1.storage.beget.cloud"
 const DEFAULT_S3_BUCKET = "1bf1b61c108f-ecolms"
+const DEFAULT_S3_REGION = "ru1"
 
 export const stageOrder = [
   "source_compiled",
@@ -593,15 +596,31 @@ export class EcolmsStore {
     const session = await this.getUploadSession(uploadId)
     await this.db.query(`update upload_sessions set status = 'uploading' where id = $1`, [uploadId])
     const endpoint = process.env.S3_ENDPOINT ?? DEFAULT_S3_ENDPOINT
+    const region = process.env.S3_REGION ?? DEFAULT_S3_REGION
+    const accessKeyId = process.env.S3_ACCESS_KEY_ID
+    const secretAccessKey = process.env.S3_SECRET_ACCESS_KEY
+    const sessionToken = process.env.S3_SESSION_TOKEN
+
+    if (!accessKeyId || !secretAccessKey) {
+      throw new InternalServerErrorException("S3 credentials are not configured")
+    }
 
     return {
       uploadId,
       partNumber,
-      signedUrl: `${endpoint}/${session.bucket}/${session.storageKey}?partNumber=${partNumber}&uploadId=${session.s3UploadId}`,
+      signedUrl: createS3UploadPartPresignedUrl({
+        endpoint,
+        region,
+        accessKeyId,
+        secretAccessKey,
+        sessionToken,
+        bucket: session.bucket,
+        key: session.storageKey,
+        uploadId: session.s3UploadId,
+        partNumber,
+      }),
       method: "PUT",
-      headers: {
-        "content-type": session.mimeType,
-      },
+      headers: {},
     }
   }
 
