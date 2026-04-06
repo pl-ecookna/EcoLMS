@@ -6,7 +6,7 @@
 
 - `web` - Next.js frontend
 - `api` - NestJS API
-- `worker` - фоновый воркер
+- `worker` - фоновый воркер, который читает Redis-очередь и обновляет PostgreSQL
 - `transcription-service` - локальный сервис транскрибации
 
 ## Файлы деплоя

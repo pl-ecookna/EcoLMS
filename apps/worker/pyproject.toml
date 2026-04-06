@@ -3,9 +3,16 @@ name = "ecolms-worker"
 version = "0.1.0"
 description = "EcoLMS background worker"
 requires-python = ">=3.12"
+dependencies = [
+  "psycopg[binary]>=3.2.0",
+]
 
 [project.scripts]
 ecolms-worker = "worker.main:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

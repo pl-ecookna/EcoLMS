@@ -6,6 +6,7 @@ import {
 import { randomUUID } from "node:crypto"
 
 import { PostgresService } from "../db/postgres.service"
+import { RedisQueueService } from "../redis/redis.service"
 
 export const stageOrder = [
   "source_compiled",
@@ -308,7 +309,10 @@ function makeProjectId() {
 
 @Injectable()
 export class EcolmsStore {
-  constructor(private readonly db: PostgresService) {}
+  constructor(
+    private readonly db: PostgresService,
+    private readonly queue: RedisQueueService
+  ) {}
 
   async health() {
     const stats = await this.db.stats()
@@ -430,7 +434,7 @@ export class EcolmsStore {
         insert into processing_jobs (
           id, project_id, stage, status, payload_json, result_json, error_text, started_at, finished_at, created_at
         ) values (
-          $1, $2, $3, 'processing', $4::jsonb, null, null, now(), null, now()
+          $1, $2, $3, 'queued', $4::jsonb, null, null, null, null, now()
         )
         returning *
       `,
@@ -447,6 +451,13 @@ export class EcolmsStore {
       )
 
       return mapJobRow(created.rows[0] ?? {})
+    })
+
+    await this.queue.enqueueProcessingJob({
+      jobId: job.id,
+      projectId: id,
+      stage: job.stage,
+      trigger: "start",
     })
 
     return { project: await this.getProject(id), job }
@@ -763,6 +774,18 @@ export class EcolmsStore {
       }
     })
 
+    if (nextStage) {
+      const queuedJob = await this.getLatestQueuedJob(projectId, nextStage)
+      if (queuedJob) {
+        await this.queue.enqueueProcessingJob({
+          jobId: queuedJob.id,
+          projectId,
+          stage: nextStage,
+          trigger: "approval",
+        })
+      }
+    }
+
     return {
       review: {
         id: reviewId,
@@ -799,7 +822,7 @@ export class EcolmsStore {
       await client.query(
         `
         update processing_jobs
-        set status = 'processing', started_at = now(), finished_at = null, error_text = null
+        set status = 'queued', started_at = null, finished_at = null, error_text = null
         where id = $1
       `,
         [jobId]
@@ -812,6 +835,13 @@ export class EcolmsStore {
       `,
         [projectId, JSON.stringify([`Повторный запуск job ${String(row.stage)}.`, ...(await this.getProjectLogs(projectId))].slice(0, 10))]
       )
+    })
+
+    await this.queue.enqueueProcessingJob({
+      jobId,
+      projectId,
+      stage: String(row.stage) as StageId,
+      trigger: "retry",
     })
 
     return this.getJob(projectId, jobId)
@@ -925,5 +955,21 @@ export class EcolmsStore {
       `update projects set logs = $2::jsonb, updated_at = now() where id = $1`,
       [projectId, JSON.stringify(logs)]
     )
+  }
+
+  private async getLatestQueuedJob(projectId: string, stage: StageId) {
+    const result = await this.db.query<Record<string, unknown>>(
+      `
+      select *
+      from processing_jobs
+      where project_id = $1 and stage = $2 and status = 'queued'
+      order by created_at desc
+      limit 1
+    `,
+      [projectId, stage]
+    )
+
+    const row = result.rows[0]
+    return row ? mapJobRow(row) : null
   }
 }
