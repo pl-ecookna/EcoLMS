@@ -12,6 +12,8 @@
     "dev:transcription": "python3 apps/transcription-service/src/transcription_service/main.py",
     "dev:web": "pnpm --dir apps/web dev",
     "build:web": "pnpm --dir apps/web build",
-    "lint:web": "pnpm --dir apps/web lint"
+    "lint:web": "pnpm --dir apps/web lint",
+    "docker:up": "docker compose up --build",
+    "docker:down": "docker compose down"
   }
 }

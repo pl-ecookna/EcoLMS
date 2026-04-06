@@ -52,6 +52,17 @@ EcoLMS — внутренний веб-инструмент для подгот�
 
 Подключения для текущего этапа разработки сохранены в [doc/Сервисы.md](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/doc/Сервисы.md).
 
+## Развертывание
+
+Для Dokploy подготовлен отдельный compose-stack и Dockerfile на каждый сервис:
+
+- [doc/Dokploy_Deploy.md](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/doc/Dokploy_Deploy.md)
+- [docker-compose.dokploy.yml](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/docker-compose.dokploy.yml)
+- [docker/web.Dockerfile](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/docker/web.Dockerfile)
+- [docker/api.Dockerfile](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/docker/api.Dockerfile)
+- [docker/worker.Dockerfile](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/docker/worker.Dockerfile)
+- [docker/transcription-service.Dockerfile](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/docker/transcription-service.Dockerfile)
+
 ## Как запускать локально
 
 1. Скопировать `.env.example` в `.env` и подставить свои значения.
@@ -60,6 +71,7 @@ EcoLMS — внутренний веб-инструмент для подгот�
 4. Запустить API: `pnpm dev:api`.
 5. Запустить transcription service: `pnpm dev:transcription`.
 6. Worker пока запускается как заглушка: `pnpm dev:worker`.
+7. Для контейнерного запуска можно использовать `pnpm docker:up`.
 
 ## Пайплайн
 

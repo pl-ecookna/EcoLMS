@@ -1,0 +1,16 @@
+.git
+.gitignore
+node_modules
+apps/*/node_modules
+apps/*/.next
+apps/*/dist
+apps/*/__pycache__
+**/.pytest_cache
+**/*.pyc
+.turbo
+coverage
+.DS_Store
+.env
+.env.*
+!/.env.example
+doc
