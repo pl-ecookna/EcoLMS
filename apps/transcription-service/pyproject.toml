@@ -1,0 +1,14 @@
+[project]
+name = "ecolms-transcription-service"
+version = "0.1.0"
+description = "EcoLMS local transcription service"
+requires-python = ">=3.12"
+
+[project.scripts]
+ecolms-transcription-service = "transcription_service.main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

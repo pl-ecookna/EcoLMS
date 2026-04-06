@@ -3,6 +3,8 @@ dist
 coverage
 .next
 .turbo
+__pycache__/
+.pytest_cache/
 .env
 .env.*
 !.env.example
@@ -10,3 +12,4 @@ coverage
 apps/*/node_modules
 apps/*/.next
 apps/*/dist
+apps/*/__pycache__/

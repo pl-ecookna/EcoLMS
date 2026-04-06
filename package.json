@@ -4,8 +4,12 @@
   "packageManager": "pnpm@10.12.4",
   "scripts": {
     "dev": "pnpm --dir apps/web dev",
-    "build": "pnpm --dir apps/web build",
+    "build": "pnpm --dir apps/web build && pnpm --dir apps/api build",
     "lint": "pnpm --dir apps/web lint",
+    "dev:api": "pnpm --dir apps/api dev",
+    "build:api": "pnpm --dir apps/api build",
+    "dev:worker": "python3 apps/worker/src/worker/main.py",
+    "dev:transcription": "python3 apps/transcription-service/src/transcription_service/main.py",
     "dev:web": "pnpm --dir apps/web dev",
     "build:web": "pnpm --dir apps/web build",
     "lint:web": "pnpm --dir apps/web lint"

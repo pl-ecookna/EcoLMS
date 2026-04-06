@@ -52,6 +52,15 @@ EcoLMS — внутренний веб-инструмент для подгот�
 
 Подключения для текущего этапа разработки сохранены в [doc/Сервисы.md](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/doc/Сервисы.md).
 
+## Как запускать локально
+
+1. Скопировать `.env.example` в `.env` и подставить свои значения.
+2. Установить зависимости в workspace: `pnpm install`.
+3. Запустить фронтенд: `pnpm dev`.
+4. Запустить API: `pnpm dev:api`.
+5. Запустить transcription service: `pnpm dev:transcription`.
+6. Worker пока запускается как заглушка: `pnpm dev:worker`.
+
 ## Пайплайн
 
 1. Пользователь создаёт проект.
