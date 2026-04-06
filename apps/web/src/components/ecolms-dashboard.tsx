@@ -4,12 +4,14 @@ import { useEffect, useMemo, useState } from "react"
 import {
   AlertCircleIcon,
   CheckCircle2Icon,
+  FileDownIcon,
   FileTextIcon,
   FolderGit2Icon,
   Loader2Icon,
   MoreHorizontalIcon,
   PencilLineIcon,
   PlusIcon,
+  PlayIcon,
   RefreshCwIcon,
   SaveIcon,
   SparklesIcon,
@@ -26,7 +28,15 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -48,257 +58,57 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 
-const stageOrder = [
-  "source_compiled",
-  "course_outline",
-  "course_content",
-  "course_test",
-] as const
+import {
+  abortUpload,
+  approveArtifact,
+  completeUpload,
+  createProject,
+  downloadProject,
+  getProject,
+  initUpload,
+  listProjects,
+  projectStatusLabels,
+  startProject,
+  retryJob,
+  signUploadPart,
+  stageLabels,
+  updateArtifact,
+  type ProjectDetailRecord,
+  type ProjectRecord,
+  type ProjectStatus,
+  type StageId,
+  type ProcessingJobRecord,
+} from "@/lib/ecolms-api"
 
-type StageId = (typeof stageOrder)[number]
-type ProjectStatus =
-  | "draft"
-  | "uploaded"
-  | "processing"
-  | "awaiting_review"
-  | "completed"
-  | "failed"
-type StageStatus = "queued" | "processing" | "done" | "failed"
+const PAGE_SIZE = 25
+const PART_SIZE_BYTES = 10 * 1024 * 1024
 
-const stageLabels: Record<StageId, string> = {
-  source_compiled: "Структурированный источник",
-  course_outline: "План курса",
-  course_content: "Обучающие материалы",
-  course_test: "Тест",
-}
+type UploadPhase = "idle" | "uploading" | "done" | "error"
 
-const projectStatusLabels: Record<ProjectStatus, string> = {
-  draft: "Черновик",
-  uploaded: "Загружен",
-  processing: "В обработке",
-  awaiting_review: "На проверке",
-  completed: "Готов",
-  failed: "Ошибка",
-}
-
-const projectStatusVariants: Record<ProjectStatus, "default" | "secondary" | "outline" | "destructive"> =
-  {
-    draft: "secondary",
-    uploaded: "outline",
-    processing: "default",
-    awaiting_review: "secondary",
-    completed: "default",
-    failed: "destructive",
-  }
-
-type ProjectRecord = {
-  id: string
-  name: string
-  githubRef: string
-  sourceSummary: string
+function projectStatusBadgeVariant(
   status: ProjectStatus
-  currentStage: StageId
-  progress: number
-  files: number
-  updatedAt: string
-  overview: string
-  stageDrafts: Record<StageId, string>
-  stages: Array<{
-    id: StageId
-    status: StageStatus
-    note: string
-    updatedAt: string
-  }>
-  artifacts: Array<{
-    id: string
-    stage: StageId
-    format: "md" | "json"
-    name: string
-    size: string
-    storageKey: string
-  }>
-  logs: string[]
-}
-
-function deriveProjectName(template: string, index: number) {
-  return `${template} ${index.toString().padStart(2, "0")}`
-}
-
-function createDrafts(name: string, topic: string): Record<StageId, string> {
-  return {
-    source_compiled: `# ${name}\n\n## Что уже известно\n- ${topic}\n- Совмещаем видео и документы в одном проекте.\n- Итог хранится только в S3.\n\n## Что удаляем\n- контакты, если они не нужны для обучения;\n- рекламный шум;\n- повторы из вебинаров.\n`,
-    course_outline: `# План курса\n\n1. Введение в ${topic}\n2. Ключевые материалы для продаж и сервиса\n3. Производственный контекст\n4. Типовые ошибки и как их избегать\n5. Проверка понимания\n`,
-    course_content: `# Обучающие материалы\n\n## Раздел 1. Введение\nКратко объясняем, зачем нужен материал и кому он адресован.\n\n## Раздел 2. Практика\nДаём пошаговые инструкции без жаргона и лишних деталей.\n`,
-    course_test: `# Тест\n\n1. Какой шаг следует после ` + "`source_compiled`" + `?\n   - План курса\n   - Список файлов\n   - Архив проекта\n2. Сколько вопросов должно быть в тесте?\n   - 5\n   - 10\n   - 15\n`,
+): "default" | "secondary" | "outline" | "destructive" {
+  switch (status) {
+    case "draft":
+      return "secondary"
+    case "uploaded":
+      return "outline"
+    case "processing":
+      return "default"
+    case "awaiting_review":
+      return "secondary"
+    case "completed":
+      return "default"
+    case "failed":
+      return "destructive"
   }
 }
 
-function buildStages(currentStage: StageId, status: ProjectStatus): ProjectRecord["stages"] {
-  const currentIndex = stageOrder.indexOf(currentStage)
-
-  return stageOrder.map((stageId, index) => {
-    const isCompleted = status === "completed" || index < currentIndex
-    const isActive = index === currentIndex && status !== "completed"
-
-    return {
-      id: stageId,
-      status: isCompleted ? "done" : isActive ? "processing" : "queued",
-      note:
-        stageId === "source_compiled"
-          ? "Нормализация исходников и удаление шума."
-          : stageId === "course_outline"
-            ? "Строим структуру курса до 10 разделов."
-            : stageId === "course_content"
-              ? "Разворачиваем материалы в обучающий текст."
-              : "Формируем базовый тест из 10 вопросов.",
-      updatedAt: index <= currentIndex ? "сегодня, 09:40" : "ожидает старта",
-    }
-  })
-}
-
-function buildArtifacts(id: string): ProjectRecord["artifacts"] {
-  return stageOrder.flatMap((stageId) => [
-    {
-      id: `${id}-${stageId}-md`,
-      stage: stageId,
-      format: "md" as const,
-      name: `${stageId}.md`,
-      size: "24 KB",
-      storageKey: `artifacts/${id}/${stageId}.md`,
-    },
-    {
-      id: `${id}-${stageId}-json`,
-      stage: stageId,
-      format: "json" as const,
-      name: `${stageId}.json`,
-      size: "12 KB",
-      storageKey: `artifacts/${id}/${stageId}.json`,
-    },
-  ])
-}
-
-function buildProjects() {
-  const templates = [
-    {
-      prefix: "EcoGlass sales enablement",
-      githubRef: "github.com/pl-ecookna/EcoLMS/issues/218",
-      sourceSummary: "Вебинар + PDF для отдела продаж",
-      topic: "продаж светопрозрачных конструкций",
-      overview: "Материал для менеджеров, которые ведут первые консультации и собирают потребности клиента.",
-      status: "awaiting_review" as ProjectStatus,
-      currentStage: "course_outline" as StageId,
-      progress: 68,
-      files: 3,
-      updatedAt: "сегодня, 10:18",
-      logs: [
-        "Загрузка завершена без ошибок.",
-        "Из видео извлечено аудио и отправлено в Whisper.",
-        "Черновик source_compiled ожидает ручной проверки.",
-      ],
-    },
-    {
-      prefix: "Монтаж и сервис",
-      githubRef: "github.com/pl-ecookna/EcoLMS/issues/227",
-      sourceSummary: "DOC + видеозапись сервисного инструктажа",
-      topic: "сервиса и монтажа",
-      overview: "Пошаговый разбор типовых работ и контрольных чек-листов для полевой команды.",
-      status: "processing" as ProjectStatus,
-      currentStage: "course_content" as StageId,
-      progress: 44,
-      files: 2,
-      updatedAt: "вчера, 16:05",
-      logs: [
-        "Очистка текста завершена.",
-        "Сформирован план курса на 6 разделов.",
-        "Генерация материалов сейчас в очереди.",
-      ],
-    },
-    {
-      prefix: "Производство и качество",
-      githubRef: "github.com/pl-ecookna/EcoLMS/issues/233",
-      sourceSummary: "PPTX, PDF и стенограмма созвона",
-      topic: "производства и контроля качества",
-      overview: "Материал для производственных мастеров с акцентом на контроль узлов и брак.",
-      status: "uploaded" as ProjectStatus,
-      currentStage: "source_compiled" as StageId,
-      progress: 18,
-      files: 4,
-      updatedAt: "вчера, 12:48",
-      logs: [
-        "Файлы загружены в Beget S3.",
-        "Проект готов к запуску обработки.",
-        "Ожидается подтверждение от пользователя.",
-      ],
-    },
-    {
-      prefix: "Коммерческое предложение",
-      githubRef: "github.com/pl-ecookna/EcoLMS/issues/240",
-      sourceSummary: "PDF КП и дополнительная презентация",
-      topic: "подготовки коммерческих предложений",
-      overview: "Пакет материалов для ускоренной подготовки КП на основе реальных документов заказчика.",
-      status: "completed" as ProjectStatus,
-      currentStage: "course_test" as StageId,
-      progress: 100,
-      files: 5,
-      updatedAt: "понедельник, 09:30",
-      logs: [
-        "Все этапы подтверждены.",
-        "Итоговый пакет сформирован.",
-        "Артефакты доступны для скачивания.",
-      ],
-    },
-  ]
-
-  return Array.from({ length: 30 }, (_, index) => {
-    const template = templates[index % templates.length]
-    const id = `eco-${String(index + 1).padStart(3, "0")}`
-    const stageDrafts = createDrafts(
-      deriveProjectName(template.prefix, index + 1),
-      template.topic
-    )
-
-    return {
-      id,
-      name: deriveProjectName(template.prefix, index + 1),
-      githubRef: template.githubRef,
-      sourceSummary: template.sourceSummary,
-      status:
-        index === 0
-          ? template.status
-          : (["draft", "uploaded", "processing", "awaiting_review", "completed"][
-              index % 5
-            ] as ProjectStatus),
-      currentStage:
-        index === 0
-          ? template.currentStage
-          : stageOrder[index % stageOrder.length],
-      progress: index === 0 ? template.progress : [14, 36, 59, 100][index % 4],
-      files: index === 0 ? template.files : 1 + (index % 5),
-      updatedAt: index === 0 ? template.updatedAt : `${index + 1} апреля, 08:${String(10 + index).padStart(2, "0")}`,
-      overview:
-        index === 0
-          ? template.overview
-          : `${template.overview} Этот проект используется как пример в списке.`,
-      stageDrafts,
-      stages: buildStages(index === 0 ? template.currentStage : stageOrder[index % 4], index === 0 ? template.status : (["draft", "uploaded", "processing", "awaiting_review", "completed"][index % 5] as ProjectStatus)),
-      artifacts: buildArtifacts(id),
-      logs: index === 0 ? template.logs : template.logs.map((entry) => `${entry} (${index + 1})`),
-    } satisfies ProjectRecord
-  })
-}
-
-const initialProjects = buildProjects()
-
-function statusBadgeVariant(status: StageStatus) {
+function stageStatusBadgeVariant(status: ProcessingJobRecord["status"]) {
   switch (status) {
     case "done":
       return "default" as const
@@ -311,143 +121,366 @@ function statusBadgeVariant(status: StageStatus) {
   }
 }
 
-function projectStatusBadgeVariant(status: ProjectStatus) {
-  return projectStatusVariants[status]
-}
-
 function makeGithubName(value: string) {
   const cleaned = value
     .replace(/^https?:\/\//, "")
     .replace(/^www\./, "")
     .replace(/\/$/, "")
-  const slug = cleaned.split("/").slice(-1)[0] || "project"
-  return slug
-    .replace(/[-_]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
+
+  const slug = cleaned.split("/").filter(Boolean).at(-1) || "project"
+  return slug.replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim()
+}
+
+function fileKind(file: File) {
+  if (file.type.startsWith("video/")) {
+    return "video"
+  }
+  if (file.type.startsWith("audio/")) {
+    return "audio"
+  }
+  if (file.type.includes("pdf") || file.name.toLowerCase().endsWith(".pdf")) {
+    return "document"
+  }
+  if (
+    file.name.toLowerCase().endsWith(".pptx") ||
+    file.name.toLowerCase().endsWith(".ppt")
+  ) {
+    return "presentation"
+  }
+  return "document"
+}
+
+function getStageArtifact(
+  project: ProjectDetailRecord | null,
+  stage: StageId,
+  format: "md" | "json" = "md"
+) {
+  return project?.artifacts.find(
+    (artifact) => artifact.stage === stage && artifact.format === format
+  )
+}
+
+function getStageMarkdown(project: ProjectDetailRecord | null, stage: StageId) {
+  return (
+    getStageArtifact(project, stage, "md")?.contentMd ??
+    project?.stageDrafts[stage] ??
+    ""
+  )
+}
+
+function latestJobs(jobs: ProcessingJobRecord[]) {
+  return [...jobs].sort(
+    (left, right) =>
+      new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+  )
 }
 
 export function EcolmsDashboard() {
-  const [projects, setProjects] = useState(initialProjects)
-  const [selectedId, setSelectedId] = useState(initialProjects[0].id)
-  const [selectedStage, setSelectedStage] = useState<StageId>(
-    initialProjects[0].currentStage
-  )
-  const [isEditing, setIsEditing] = useState(false)
-  const [editorValue, setEditorValue] = useState(
-    initialProjects[0].stageDrafts[initialProjects[0].currentStage]
-  )
+  const [projects, setProjects] = useState<ProjectRecord[]>([])
+  const [projectTotal, setProjectTotal] = useState(0)
   const [page, setPage] = useState(1)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedProject, setSelectedProject] =
+    useState<ProjectDetailRecord | null>(null)
+  const [selectedStage, setSelectedStage] = useState<StageId>("source_compiled")
+  const [editorValue, setEditorValue] = useState("")
+  const [isEditing, setIsEditing] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
-  const [githubUrl, setGithubUrl] = useState("")
+  const [githubRef, setGithubRef] = useState("")
+  const [projectNote, setProjectNote] = useState("")
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
+  const [listLoading, setListLoading] = useState(true)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [mutating, setMutating] = useState(false)
+  const [uploadPhase, setUploadPhase] = useState<UploadPhase>("idle")
+  const [uploadMessage, setUploadMessage] = useState("")
+  const [uploadProgress, setUploadProgress] = useState(0)
+  const [listError, setListError] = useState<string | null>(null)
+  const [detailError, setDetailError] = useState<string | null>(null)
 
-  const pageSize = 25
-  const totalPages = Math.max(1, Math.ceil(projects.length / pageSize))
-  const pageProjects = useMemo(
-    () => projects.slice((page - 1) * pageSize, page * pageSize),
-    [page, projects]
+  const totalPages = Math.max(1, Math.ceil(projectTotal / PAGE_SIZE))
+  const pageProjects = useMemo(() => projects, [projects])
+  const jobs = useMemo(
+    () => latestJobs(selectedProject?.jobs ?? []),
+    [selectedProject]
   )
-  const selectedProject = useMemo(
-    () => projects.find((project) => project.id === selectedId) ?? projects[0],
-    [projects, selectedId]
-  )
-  const uploadProgress = selectedFiles.length
-    ? Math.min(100, Math.round((selectedFiles.length / 5) * 100))
-    : 0
+  const currentStageArtifact = getStageArtifact(selectedProject, selectedStage, "md")
+
+  async function refreshProjects(nextPage = page) {
+    setListLoading(true)
+    setListError(null)
+    try {
+      const response = await listProjects(nextPage, PAGE_SIZE)
+      setProjects(response.items)
+      setProjectTotal(response.total)
+      setPage(response.page)
+
+      if (response.items.length === 0) {
+        setSelectedId(null)
+        setSelectedProject(null)
+        return
+      }
+
+      if (!selectedId || !response.items.some((project) => project.id === selectedId)) {
+        setSelectedId(response.items[0]?.id ?? null)
+      }
+    } catch (error) {
+      setListError(error instanceof Error ? error.message : "Не удалось загрузить проекты")
+    } finally {
+      setListLoading(false)
+    }
+  }
+
+  async function refreshProject(projectId: string) {
+    setDetailLoading(true)
+    setDetailError(null)
+    try {
+      const response = await getProject(projectId)
+      setSelectedProject(response)
+      setSelectedStage(response.currentStage)
+      setEditorValue(getStageMarkdown(response, response.currentStage))
+      setIsEditing(false)
+      return response
+    } catch (error) {
+      setDetailError(error instanceof Error ? error.message : "Не удалось загрузить проект")
+      throw error
+    } finally {
+      setDetailLoading(false)
+    }
+  }
 
   useEffect(() => {
+    void refreshProjects(1)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    if (!selectedId) {
+      return
+    }
+    void refreshProject(selectedId)
+  }, [selectedId])
+
+  useEffect(() => {
+    if (!selectedProject) {
+      return
+    }
     setSelectedStage(selectedProject.currentStage)
-    setEditorValue(selectedProject.stageDrafts[selectedProject.currentStage])
+    setEditorValue(getStageMarkdown(selectedProject, selectedProject.currentStage))
     setIsEditing(false)
   }, [selectedProject])
 
   useEffect(() => {
-    setEditorValue(selectedProject.stageDrafts[selectedStage])
-  }, [selectedStage, selectedProject])
+    if (!selectedProject) {
+      return
+    }
+    setEditorValue(getStageMarkdown(selectedProject, selectedStage))
+  }, [selectedProject, selectedStage])
 
-  function updateSelectedProject(
-    updater: (project: ProjectRecord) => ProjectRecord
-  ) {
-    setProjects((current) =>
-      current.map((project) =>
-        project.id === selectedProject.id ? updater(project) : project
-      )
+  async function handleCreateProject() {
+    if (!githubRef.trim()) {
+      return
+    }
+
+    setMutating(true)
+    try {
+      const created = await createProject({
+        githubRef: githubRef.trim(),
+        note: projectNote.trim() || undefined,
+      })
+
+      setCreateOpen(false)
+      setGithubRef("")
+      setProjectNote("")
+      setSelectedFiles([])
+      setPage(1)
+      setSelectedId(created.id)
+      setSelectedProject(created)
+      setSelectedStage(created.currentStage)
+      setEditorValue(getStageMarkdown(created, created.currentStage))
+
+      await refreshProjects(1)
+    } finally {
+      setMutating(false)
+    }
+  }
+
+  async function handleUploadFiles() {
+    if (!selectedProject || selectedFiles.length === 0) {
+      return
+    }
+
+    setUploadPhase("uploading")
+    setUploadMessage("Инициализируем multipart upload")
+    setUploadProgress(0)
+
+    const totalChunks = selectedFiles.reduce(
+      (sum, file) => sum + Math.max(1, Math.ceil(file.size / PART_SIZE_BYTES)),
+      0
     )
-  }
+    let completedChunks = 0
 
-  function handleSaveDraft() {
-    updateSelectedProject((project) => ({
-      ...project,
-      stageDrafts: {
-        ...project.stageDrafts,
-        [selectedStage]: editorValue,
-      },
-      updatedAt: "только что",
-      logs: [`Сохранена последняя версия этапа ${stageLabels[selectedStage]}.`, ...project.logs].slice(0, 5),
-    }))
-    setIsEditing(false)
-  }
+    try {
+      for (const file of selectedFiles) {
+        const init = await initUpload(selectedProject.id, {
+          fileName: file.name,
+          fileSize: file.size,
+          mimeType: file.type || "application/octet-stream",
+          kind: fileKind(file),
+        })
 
-  function handleApproveStage() {
-    const currentIndex = stageOrder.indexOf(selectedStage)
-    const nextStage = stageOrder[currentIndex + 1]
+        const partSize = init.partSize || PART_SIZE_BYTES
+        const totalParts = Math.max(1, Math.ceil(file.size / partSize))
+        let uploadAborted = false
 
-    updateSelectedProject((project) => {
-      const nextStages = project.stages.map((stage) =>
-        stage.id === selectedStage
-          ? { ...stage, status: "done" as StageStatus, updatedAt: "только что" }
-          : stage.id === nextStage
-            ? { ...stage, status: "processing" as StageStatus, updatedAt: "ожидает генерации" }
-            : stage
-      )
+        try {
+          for (let partNumber = 1; partNumber <= totalParts; partNumber += 1) {
+            const start = (partNumber - 1) * partSize
+            const end = Math.min(file.size, partNumber * partSize)
+            const part = file.slice(start, end)
+            const signed = await signUploadPart(init.uploadId, partNumber)
 
-      return {
-        ...project,
-        status: nextStage ? "processing" : "completed",
-        currentStage: nextStage ?? selectedStage,
-        progress: nextStage ? Math.min(100, project.progress + 18) : 100,
-        stages: nextStages,
-        updatedAt: "только что",
-        logs: [`Этап ${stageLabels[selectedStage]} подтвержден.`, ...project.logs].slice(0, 5),
+            setUploadMessage(`Загружается ${file.name}: часть ${partNumber}/${totalParts}`)
+            const response = await fetch(signed.signedUrl, {
+              method: signed.method || "PUT",
+              headers: signed.headers,
+              body: part,
+            })
+
+            if (!response.ok) {
+              throw new Error(`Не удалось загрузить часть ${partNumber} файла ${file.name}`)
+            }
+
+            completedChunks += 1
+            setUploadProgress(Math.round((completedChunks / totalChunks) * 100))
+          }
+
+          await completeUpload(init.uploadId)
+        } catch (error) {
+          uploadAborted = true
+          await abortUpload(init.uploadId).catch(() => undefined)
+          throw error
+        } finally {
+          if (uploadAborted) {
+            setUploadMessage(`Загрузка ${file.name} прервана`)
+          }
+        }
       }
-    })
 
-    if (nextStage) {
-      setSelectedStage(nextStage)
-      setEditorValue(selectedProject.stageDrafts[nextStage])
+      setUploadPhase("done")
+      setUploadMessage("Файлы загружены")
+      setSelectedFiles([])
+
+      await refreshProjects(page)
+      if (selectedProject?.id) {
+        await refreshProject(selectedProject.id)
+      }
+    } catch (error) {
+      setUploadPhase("error")
+      setUploadMessage(
+        error instanceof Error ? error.message : "Не удалось загрузить файлы"
+      )
     }
-    setIsEditing(false)
   }
 
-  function handleCreateProject() {
-    const derivedName = makeGithubName(githubUrl) || "new project"
-    const newProject: ProjectRecord = {
-      id: `eco-${String(projects.length + 1).padStart(3, "0")}`,
-      name: deriveProjectName(derivedName, projects.length + 1),
-      githubRef: githubUrl || "github.com/pl-ecookna/EcoLMS/issues/new",
-      sourceSummary: "Новый проект, ожидающий загрузки материалов",
-      status: "draft",
-      currentStage: "source_compiled",
-      progress: 0,
-      files: selectedFiles.length,
-      updatedAt: "только что",
-      overview:
-        "Создан новый проект. После загрузки файлов можно запускать обработку.",
-      stageDrafts: createDrafts(
-        deriveProjectName(derivedName, projects.length + 1),
-        "нового обучающего курса"
-      ),
-      stages: buildStages("source_compiled", "draft"),
-      artifacts: buildArtifacts(`eco-${String(projects.length + 1).padStart(3, "0")}`),
-      logs: ["Проект создан из GitHub-источника."],
+  async function handleStartProject() {
+    if (!selectedProject) {
+      return
     }
 
-    setProjects((current) => [newProject, ...current])
-    setSelectedId(newProject.id)
-    setCreateOpen(false)
-    setGithubUrl("")
+    setMutating(true)
+    try {
+      await startProject(selectedProject.id)
+      await refreshProjects(page)
+      await refreshProject(selectedProject.id)
+    } finally {
+      setMutating(false)
+    }
   }
+
+  async function handleSaveDraft() {
+    if (!selectedProject) {
+      return
+    }
+
+    const artifact = currentStageArtifact
+    if (!artifact) {
+      return
+    }
+
+    setMutating(true)
+    try {
+      await updateArtifact(selectedProject.id, artifact.id, editorValue)
+      await refreshProjects(page)
+      await refreshProject(selectedProject.id)
+    } finally {
+      setMutating(false)
+    }
+  }
+
+  async function handleApproveStage() {
+    if (!selectedProject) {
+      return
+    }
+
+    const artifact = currentStageArtifact
+    if (!artifact) {
+      return
+    }
+
+    setMutating(true)
+    try {
+      const response = await approveArtifact(selectedProject.id, artifact.id)
+      setSelectedProject(response.project)
+      setSelectedId(response.project.id)
+      setSelectedStage(response.project.currentStage)
+      setEditorValue(getStageMarkdown(response.project, response.project.currentStage))
+      await refreshProjects(page)
+    } finally {
+      setMutating(false)
+    }
+  }
+
+  async function handleRetryJob(jobId: string) {
+    if (!selectedProject) {
+      return
+    }
+
+    setMutating(true)
+    try {
+      await retryJob(selectedProject.id, jobId)
+      await refreshProject(selectedProject.id)
+      await refreshProjects(page)
+    } finally {
+      setMutating(false)
+    }
+  }
+
+  async function handleDownloadArtifact(stage: StageId, format: "md" | "json") {
+    if (!selectedProject) {
+      return
+    }
+
+    const assets = await downloadProject(selectedProject.id)
+    const asset = assets.find(
+      (item) => item.stage === stage && item.format === format
+    )
+    if (asset) {
+      window.open(asset.downloadUrl, "_blank", "noopener,noreferrer")
+    }
+  }
+
+  const summary = useMemo(() => {
+    const awaiting = projects.filter(
+      (project) => project.status === "awaiting_review"
+    ).length
+    const completed = projects.filter((project) => project.status === "completed").length
+    return {
+      total: projectTotal,
+      awaiting,
+      completed,
+    }
+  }, [projectTotal, projects])
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(0,0,0,0.05),_transparent_28%),radial-gradient(circle_at_top_right,_rgba(0,0,0,0.03),_transparent_22%)]">
@@ -469,7 +502,15 @@ export function EcolmsDashboard() {
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline">
+            <Button
+              variant="outline"
+              onClick={() => {
+                void refreshProjects(page)
+                if (selectedProject?.id) {
+                  void refreshProject(selectedProject.id)
+                }
+              }}
+            >
               <RefreshCwIcon data-icon="inline-start" />
               Обновить
             </Button>
@@ -486,8 +527,7 @@ export function EcolmsDashboard() {
                 <DialogHeader>
                   <DialogTitle>Создать проект</DialogTitle>
                   <DialogDescription>
-                    Название проекта формируется из GitHub-источника и не
-                    редактируется вручную.
+                    Название проекта будет собрано автоматически из GitHub-источника.
                   </DialogDescription>
                 </DialogHeader>
                 <div className="grid gap-4">
@@ -495,16 +535,16 @@ export function EcolmsDashboard() {
                     <Label htmlFor="github-url">GitHub-источник</Label>
                     <Input
                       id="github-url"
-                      value={githubUrl}
-                      onChange={(event) => setGithubUrl(event.target.value)}
+                      value={githubRef}
+                      onChange={(event) => setGithubRef(event.target.value)}
                       placeholder="https://github.com/..."
                     />
                   </div>
                   <div className="grid gap-2">
-                    <Label htmlFor="project-name">Название проекта</Label>
+                    <Label htmlFor="project-name">Предпросмотр имени</Label>
                     <Input
                       id="project-name"
-                      value={makeGithubName(githubUrl) || "Будет рассчитано автоматически"}
+                      value={makeGithubName(githubRef) || "Будет рассчитано автоматически"}
                       readOnly
                     />
                   </div>
@@ -514,6 +554,8 @@ export function EcolmsDashboard() {
                       id="project-note"
                       placeholder="Например: материалы по продаже и монтажу изделий для отдела продаж."
                       className="min-h-24"
+                      value={projectNote}
+                      onChange={(event) => setProjectNote(event.target.value)}
                     />
                   </div>
                 </div>
@@ -521,7 +563,9 @@ export function EcolmsDashboard() {
                   <Button variant="outline" onClick={() => setCreateOpen(false)}>
                     Отмена
                   </Button>
-                  <Button onClick={handleCreateProject}>Создать</Button>
+                  <Button onClick={() => void handleCreateProject()} disabled={mutating}>
+                    {mutating ? "Создаём..." : "Создать"}
+                  </Button>
                 </DialogFooter>
               </DialogContent>
             </Dialog>
@@ -532,23 +576,19 @@ export function EcolmsDashboard() {
           <Card size="sm">
             <CardHeader>
               <CardDescription>Всего проектов</CardDescription>
-              <CardTitle>{projects.length}</CardTitle>
+              <CardTitle>{summary.total}</CardTitle>
             </CardHeader>
           </Card>
           <Card size="sm">
             <CardHeader>
               <CardDescription>На проверке</CardDescription>
-              <CardTitle>
-                {projects.filter((project) => project.status === "awaiting_review").length}
-              </CardTitle>
+              <CardTitle>{summary.awaiting}</CardTitle>
             </CardHeader>
           </Card>
           <Card size="sm">
             <CardHeader>
               <CardDescription>Готовые пакеты</CardDescription>
-              <CardTitle>
-                {projects.filter((project) => project.status === "completed").length}
-              </CardTitle>
+              <CardTitle>{summary.completed}</CardTitle>
             </CardHeader>
           </Card>
           <Card size="sm">
@@ -558,6 +598,14 @@ export function EcolmsDashboard() {
             </CardHeader>
           </Card>
         </section>
+
+        {listError ? (
+          <Alert>
+            <AlertCircleIcon />
+            <AlertTitle>Не удалось загрузить список проектов</AlertTitle>
+            <AlertDescription>{listError}</AlertDescription>
+          </Alert>
+        ) : null}
 
         <div className="grid gap-6 xl:grid-cols-[380px_minmax(0,1fr)]">
           <div className="flex flex-col gap-6">
@@ -596,6 +644,9 @@ export function EcolmsDashboard() {
                     }
                   </ProgressValue>
                 </Progress>
+                {uploadMessage ? (
+                  <div className="text-xs text-muted-foreground">{uploadMessage}</div>
+                ) : null}
                 <div className="flex flex-wrap gap-2">
                   {selectedFiles.length ? (
                     selectedFiles.map((file) => (
@@ -607,10 +658,24 @@ export function EcolmsDashboard() {
                     <Badge variant="outline">Файлы еще не выбраны</Badge>
                   )}
                 </div>
-                <Button variant="outline" disabled={!selectedFiles.length}>
-                  <UploadIcon data-icon="inline-start" />
-                  Инициализировать загрузку
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    disabled={!selectedProject || !selectedFiles.length || uploadPhase === "uploading"}
+                    onClick={() => void handleUploadFiles()}
+                  >
+                    <UploadIcon data-icon="inline-start" />
+                    {uploadPhase === "uploading" ? "Загрузка..." : "Загрузить в S3"}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    disabled={!selectedProject || !selectedProject.sourceFiles.length || mutating}
+                    onClick={() => void handleStartProject()}
+                  >
+                    <PlayIcon data-icon="inline-start" />
+                    Запустить обработку
+                  </Button>
+                </div>
               </CardContent>
             </Card>
 
@@ -632,38 +697,59 @@ export function EcolmsDashboard() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {pageProjects.map((project) => (
-                      <TableRow
-                        key={project.id}
-                        data-state={project.id === selectedProject.id ? "selected" : undefined}
-                        className="cursor-pointer"
-                        onClick={() => setSelectedId(project.id)}
-                      >
-                        <TableCell className="max-w-[190px]">
-                          <div className="flex flex-col gap-1">
-                            <span className="truncate font-medium">{project.name}</span>
-                            <span className="truncate text-xs text-muted-foreground">
-                              {project.sourceSummary}
-                            </span>
+                    {listLoading ? (
+                      Array.from({ length: 5 }).map((_, index) => (
+                        <TableRow key={index}>
+                          <TableCell colSpan={3}>
+                            <div className="flex items-center gap-3 py-1">
+                              <div className="h-4 w-36 animate-pulse rounded bg-muted" />
+                              <div className="h-4 w-20 animate-pulse rounded bg-muted" />
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    ) : pageProjects.length ? (
+                      pageProjects.map((project) => (
+                        <TableRow
+                          key={project.id}
+                          data-state={project.id === selectedProject?.id ? "selected" : undefined}
+                          className="cursor-pointer"
+                          onClick={() => setSelectedId(project.id)}
+                        >
+                          <TableCell className="max-w-[190px]">
+                            <div className="flex flex-col gap-1">
+                              <span className="truncate font-medium">{project.name}</span>
+                              <span className="truncate text-xs text-muted-foreground">
+                                {project.sourceSummary}
+                              </span>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={projectStatusBadgeVariant(project.status)}>
+                              {projectStatusLabels[project.status]}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right text-xs text-muted-foreground">
+                            {stageLabels[project.currentStage]}
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    ) : (
+                      <TableRow>
+                        <TableCell colSpan={3}>
+                          <div className="py-10 text-center text-sm text-muted-foreground">
+                            Проектов пока нет. Создайте первый проект или обновите список.
                           </div>
                         </TableCell>
-                        <TableCell>
-                          <Badge variant={projectStatusBadgeVariant(project.status)}>
-                            {projectStatusLabels[project.status]}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right text-xs text-muted-foreground">
-                          {stageLabels[project.currentStage]}
-                        </TableCell>
                       </TableRow>
-                    ))}
+                    )}
                   </TableBody>
                 </Table>
                 <Separator />
                 <div className="flex items-center justify-between px-4 py-4">
                   <div className="text-sm text-muted-foreground">
-                    Показаны {Math.min(projects.length, (page - 1) * pageSize + 1)}-
-                    {Math.min(page * pageSize, projects.length)} из {projects.length}
+                    Показаны {projectTotal === 0 ? 0 : (page - 1) * PAGE_SIZE + 1}-
+                    {Math.min(page * PAGE_SIZE, projectTotal)} из {projectTotal}
                   </div>
                   <Pagination className="mx-0 w-auto justify-end">
                     <PaginationContent>
@@ -672,7 +758,9 @@ export function EcolmsDashboard() {
                           href="#"
                           onClick={(event) => {
                             event.preventDefault()
-                            setPage((current) => Math.max(1, current - 1))
+                            const nextPage = Math.max(1, page - 1)
+                            setPage(nextPage)
+                            void refreshProjects(nextPage)
                           }}
                         />
                       </PaginationItem>
@@ -685,6 +773,7 @@ export function EcolmsDashboard() {
                               onClick={(event) => {
                                 event.preventDefault()
                                 setPage(pageNumber)
+                                void refreshProjects(pageNumber)
                               }}
                             >
                               {pageNumber}
@@ -697,7 +786,9 @@ export function EcolmsDashboard() {
                           href="#"
                           onClick={(event) => {
                             event.preventDefault()
-                            setPage((current) => Math.min(totalPages, current + 1))
+                            const nextPage = Math.min(totalPages, page + 1)
+                            setPage(nextPage)
+                            void refreshProjects(nextPage)
                           }}
                         />
                       </PaginationItem>
@@ -710,60 +801,112 @@ export function EcolmsDashboard() {
 
           <Card className="min-h-[780px]">
             <CardHeader className="border-b">
-              <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                <div className="flex min-w-0 flex-col gap-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <CardTitle className="truncate">{selectedProject.name}</CardTitle>
-                    <Badge variant={projectStatusBadgeVariant(selectedProject.status)}>
-                      {projectStatusLabels[selectedProject.status]}
-                    </Badge>
+              {selectedProject ? (
+                <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                  <div className="flex min-w-0 flex-col gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <CardTitle className="truncate">{selectedProject.name}</CardTitle>
+                      <Badge variant={projectStatusBadgeVariant(selectedProject.status)}>
+                        {projectStatusLabels[selectedProject.status]}
+                      </Badge>
+                    </div>
+                    <CardDescription>{selectedProject.overview}</CardDescription>
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                      <span className="inline-flex items-center gap-1">
+                        <FolderGit2Icon className="size-3.5" />
+                        {selectedProject.githubRef}
+                      </span>
+                      <span className="inline-flex items-center gap-1">
+                        <FileTextIcon className="size-3.5" />
+                        {selectedProject.sourceFiles.length} файла
+                      </span>
+                      <span>{selectedProject.updatedAt}</span>
+                    </div>
                   </div>
-                  <CardDescription>{selectedProject.overview}</CardDescription>
-                  <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                    <span className="inline-flex items-center gap-1">
-                      <FolderGit2Icon className="size-3.5" />
-                      {selectedProject.githubRef}
-                    </span>
-                    <span className="inline-flex items-center gap-1">
-                      <FileTextIcon className="size-3.5" />
-                      {selectedProject.files} файла
-                    </span>
-                    <span>{selectedProject.updatedAt}</span>
+                  <div className="flex min-w-[320px] flex-col gap-3">
+                    <Progress value={selectedProject.progress} className="flex flex-col gap-2">
+                      <ProgressLabel>Готовность полного пакета</ProgressLabel>
+                      <ProgressValue>
+                        {(formattedValue, value) =>
+                          `${formattedValue ?? value ?? 0}%`
+                        }
+                      </ProgressValue>
+                    </Progress>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        variant="outline"
+                        onClick={() => setIsEditing((current) => !current)}
+                        disabled={detailLoading || mutating}
+                      >
+                        <PencilLineIcon data-icon="inline-start" />
+                        {isEditing ? "Редактирование включено" : "Редактировать"}
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        onClick={() => void handleSaveDraft()}
+                        disabled={mutating || !currentStageArtifact}
+                      >
+                        <SaveIcon data-icon="inline-start" />
+                        Сохранить
+                      </Button>
+                      <Button
+                        onClick={() => void handleApproveStage()}
+                        disabled={mutating || !currentStageArtifact}
+                      >
+                        <CheckCircle2Icon data-icon="inline-start" />
+                        Подтвердить
+                      </Button>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          void refreshProjects(page)
+                          void refreshProject(selectedProject.id)
+                        }}
+                        disabled={detailLoading || mutating}
+                      >
+                        <RefreshCwIcon data-icon="inline-start" />
+                        Обновить проект
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          const exportTarget = currentStageArtifact
+                          if (!exportTarget) {
+                            return
+                          }
+                          void handleDownloadArtifact(exportTarget.stage, exportTarget.format)
+                        }}
+                        disabled={!currentStageArtifact}
+                      >
+                        <FileDownIcon data-icon="inline-start" />
+                        Скачать артефакт
+                      </Button>
+                    </div>
                   </div>
                 </div>
-                <div className="flex min-w-[320px] flex-col gap-3">
-                  <Progress
-                    value={selectedProject.progress}
-                    className="flex flex-col gap-2"
-                  >
-                    <ProgressLabel>Готовность полного пакета</ProgressLabel>
-                    <ProgressValue>
-                      {(formattedValue, value) =>
-                        `${formattedValue ?? value ?? 0}%`
-                      }
-                    </ProgressValue>
-                  </Progress>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      onClick={() => setIsEditing((current) => !current)}
-                    >
-                      <PencilLineIcon data-icon="inline-start" />
-                      {isEditing ? "Редактирование включено" : "Редактировать"}
-                    </Button>
-                    <Button variant="secondary" onClick={handleSaveDraft}>
-                      <SaveIcon data-icon="inline-start" />
-                      Сохранить
-                    </Button>
-                    <Button onClick={handleApproveStage}>
-                      <CheckCircle2Icon data-icon="inline-start" />
-                      Подтвердить
-                    </Button>
-                  </div>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  <CardTitle>Нет выбранного проекта</CardTitle>
+                  <CardDescription>
+                    Создайте проект или выберите его из списка слева.
+                  </CardDescription>
                 </div>
-              </div>
+              )}
             </CardHeader>
+
             <CardContent className="p-0">
+              {detailError ? (
+                <div className="p-4">
+                  <Alert>
+                    <AlertCircleIcon />
+                    <AlertTitle>Не удалось загрузить проект</AlertTitle>
+                    <AlertDescription>{detailError}</AlertDescription>
+                  </Alert>
+                </div>
+              ) : null}
+
               <Tabs defaultValue="stages" className="gap-0">
                 <TabsList variant="line" className="border-b px-4 pt-4">
                   <TabsTrigger value="stages">Этапы</TabsTrigger>
@@ -772,166 +915,294 @@ export function EcolmsDashboard() {
                 </TabsList>
 
                 <TabsContent value="stages" className="p-4">
-                  <div className="grid gap-4 xl:grid-cols-[1.1fr_minmax(0,1fr)]">
-                    <div className="grid gap-3">
-                      {selectedProject.stages.map((stage) => (
-                        <button
-                          key={stage.id}
-                          type="button"
-                          onClick={() => {
-                            setSelectedStage(stage.id)
-                            setIsEditing(false)
-                          }}
-                          className={cn(
-                            "flex items-start justify-between gap-3 rounded-xl border p-4 text-left transition hover:bg-muted/40",
-                            selectedStage === stage.id && "border-foreground/30 bg-muted/40"
-                          )}
-                        >
-                          <div className="flex min-w-0 flex-col gap-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="font-medium">{stageLabels[stage.id]}</span>
-                              <Badge variant={statusBadgeVariant(stage.status)}>
-                                {stage.status === "done"
-                                  ? "Готов"
-                                  : stage.status === "processing"
-                                    ? "В работе"
-                                    : stage.status === "failed"
-                                      ? "Ошибка"
-                                      : "Ожидает"}
-                              </Badge>
+                  {selectedProject ? (
+                    <div className="grid gap-4 xl:grid-cols-[1.1fr_minmax(0,1fr)]">
+                      <div className="grid gap-3">
+                        {selectedProject.stages.map((stage) => (
+                          <button
+                            key={stage.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedStage(stage.id)
+                              setIsEditing(false)
+                            }}
+                            className={cn(
+                              "flex items-start justify-between gap-3 rounded-xl border p-4 text-left transition hover:bg-muted/40",
+                              selectedStage === stage.id &&
+                                "border-foreground/30 bg-muted/40"
+                            )}
+                          >
+                            <div className="flex min-w-0 flex-col gap-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-medium">{stageLabels[stage.id]}</span>
+                                <Badge variant={stageStatusBadgeVariant(stage.status)}>
+                                  {stage.status === "done"
+                                    ? "Готов"
+                                    : stage.status === "processing"
+                                      ? "В работе"
+                                      : stage.status === "failed"
+                                        ? "Ошибка"
+                                        : "Ожидает"}
+                                </Badge>
+                              </div>
+                              <p className="text-sm text-muted-foreground">{stage.note}</p>
+                              <span className="text-xs text-muted-foreground">
+                                {stage.updatedAt}
+                              </span>
                             </div>
-                            <p className="text-sm text-muted-foreground">{stage.note}</p>
-                            <span className="text-xs text-muted-foreground">
-                              {stage.updatedAt}
-                            </span>
-                          </div>
-                          <MoreHorizontalIcon className="mt-0.5 size-4 text-muted-foreground" />
-                        </button>
-                      ))}
-                    </div>
+                            <MoreHorizontalIcon className="mt-0.5 size-4 text-muted-foreground" />
+                          </button>
+                        ))}
+                      </div>
 
-                    <div className="flex flex-col gap-4">
-                      <div className="flex items-center justify-between">
-                        <div className="flex flex-col gap-1">
-                          <div className="text-sm font-medium">
-                            {stageLabels[selectedStage]}
+                      <div className="flex flex-col gap-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex flex-col gap-1">
+                            <div className="text-sm font-medium">
+                              {stageLabels[selectedStage]}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              Последняя версия хранится только как итоговый черновик.
+                            </div>
                           </div>
-                          <div className="text-xs text-muted-foreground">
-                            Последняя версия хранится только как итоговый черновик.
-                          </div>
+                          <Badge variant="outline">Markdown</Badge>
                         </div>
-                        <Badge variant="outline">Markdown</Badge>
-                      </div>
-                      <Textarea
-                        value={editorValue}
-                        onChange={(event) => setEditorValue(event.target.value)}
-                        readOnly={!isEditing}
-                        className="min-h-[420px] font-mono text-sm"
-                      />
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Button
-                          variant="outline"
-                          onClick={() => setIsEditing(true)}
-                          disabled={isEditing}
-                        >
-                          <PencilLineIcon data-icon="inline-start" />
-                          Редактировать
-                        </Button>
-                        <Button variant="secondary" onClick={handleSaveDraft}>
-                          <SaveIcon data-icon="inline-start" />
-                          Сохранить черновик
-                        </Button>
-                        <Button onClick={handleApproveStage}>
-                          <CheckCircle2Icon data-icon="inline-start" />
-                          Подтвердить этап
-                        </Button>
+                        <Textarea
+                          value={editorValue}
+                          onChange={(event) => {
+                            setEditorValue(event.target.value)
+                            setIsEditing(true)
+                          }}
+                          readOnly={!isEditing}
+                          className="min-h-[420px] font-mono text-sm"
+                        />
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            variant="outline"
+                            onClick={() => setIsEditing(true)}
+                            disabled={isEditing}
+                          >
+                            <PencilLineIcon data-icon="inline-start" />
+                            Редактировать
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            onClick={() => void handleSaveDraft()}
+                            disabled={mutating || !currentStageArtifact}
+                          >
+                            <SaveIcon data-icon="inline-start" />
+                            Сохранить черновик
+                          </Button>
+                          <Button
+                            onClick={() => void handleApproveStage()}
+                            disabled={mutating || !currentStageArtifact}
+                          >
+                            <CheckCircle2Icon data-icon="inline-start" />
+                            Подтвердить этап
+                          </Button>
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="rounded-xl border p-10 text-center text-sm text-muted-foreground">
+                      Выберите проект, чтобы увидеть этапы.
+                    </div>
+                  )}
                 </TabsContent>
 
                 <TabsContent value="artifacts" className="p-4">
-                  <div className="grid gap-4">
-                    <Alert>
-                      <CheckCircle2Icon />
-                      <AlertTitle>Артефакты хранятся только в S3</AlertTitle>
-                      <AlertDescription>
-                        В PostgreSQL лежат только метаданные и ссылки на файлы.
-                      </AlertDescription>
-                    </Alert>
-                    <Card size="sm">
-                      <CardContent className="p-0">
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead>Файл</TableHead>
-                              <TableHead>Этап</TableHead>
-                              <TableHead>Размер</TableHead>
-                              <TableHead className="text-right">Статус</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {selectedProject.artifacts.map((artifact) => (
-                              <TableRow key={artifact.id}>
-                                <TableCell>
-                                  <div className="flex flex-col gap-1">
-                                    <span className="font-medium">{artifact.name}</span>
-                                    <span className="text-xs text-muted-foreground">
-                                      {artifact.storageKey}
-                                    </span>
-                                  </div>
-                                </TableCell>
-                                <TableCell>{stageLabels[artifact.stage]}</TableCell>
-                                <TableCell>{artifact.size}</TableCell>
-                                <TableCell className="text-right">
-                                  <Badge variant="secondary">Готов</Badge>
-                                </TableCell>
+                  {selectedProject ? (
+                    <div className="grid gap-4">
+                      <Alert>
+                        <CheckCircle2Icon />
+                        <AlertTitle>Артефакты хранятся только в S3</AlertTitle>
+                        <AlertDescription>
+                          В PostgreSQL лежат только метаданные и ссылки на файлы.
+                        </AlertDescription>
+                      </Alert>
+                      <Card size="sm">
+                        <CardContent className="p-0">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>Файл</TableHead>
+                                <TableHead>Этап</TableHead>
+                                <TableHead>Размер</TableHead>
+                                <TableHead className="text-right">Действия</TableHead>
                               </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      </CardContent>
-                    </Card>
-                    <div className="flex flex-wrap gap-2">
-                      <Button variant="outline">
-                        <FileTextIcon data-icon="inline-start" />
-                        Скачать Markdown
-                      </Button>
-                      <Button variant="outline">
-                        <FileTextIcon data-icon="inline-start" />
-                        Скачать JSON
-                      </Button>
-                      <Button>
-                        <SparklesIcon data-icon="inline-start" />
-                        Собрать полный пакет
-                      </Button>
+                            </TableHeader>
+                            <TableBody>
+                              {selectedProject.artifacts.map((artifact) => (
+                                <TableRow key={artifact.id}>
+                                  <TableCell>
+                                    <div className="flex flex-col gap-1">
+                                      <span className="font-medium">
+                                        {artifact.stage}.{artifact.format}
+                                      </span>
+                                      <span className="text-xs text-muted-foreground">
+                                        {artifact.storageKey}
+                                      </span>
+                                    </div>
+                                  </TableCell>
+                                  <TableCell>{stageLabels[artifact.stage]}</TableCell>
+                                  <TableCell>
+                                    {artifact.format === "md" ? "Markdown" : "JSON"}
+                                  </TableCell>
+                                  <TableCell className="text-right">
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() =>
+                                        void handleDownloadArtifact(
+                                          artifact.stage,
+                                          artifact.format
+                                        )
+                                      }
+                                    >
+                                      <FileDownIcon data-icon="inline-start" />
+                                      Скачать
+                                    </Button>
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </CardContent>
+                      </Card>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            const artifact = getStageArtifact(selectedProject, selectedStage, "md")
+                            if (artifact) {
+                              setEditorValue(artifact.contentMd)
+                              setIsEditing(true)
+                            }
+                          }}
+                        >
+                          <FileTextIcon data-icon="inline-start" />
+                          Открыть Markdown
+                        </Button>
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            const artifact = getStageArtifact(selectedProject, selectedStage, "md")
+                            if (artifact) {
+                              setEditorValue(artifact.contentMd)
+                            }
+                          }}
+                        >
+                          <RefreshCwIcon data-icon="inline-start" />
+                          Обновить редактор
+                        </Button>
+                        <Button
+                          onClick={() => void handleApproveStage()}
+                          disabled={mutating || !currentStageArtifact}
+                        >
+                          <SparklesIcon data-icon="inline-start" />
+                          Собрать следующий этап
+                        </Button>
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="rounded-xl border p-10 text-center text-sm text-muted-foreground">
+                      Выберите проект, чтобы увидеть артефакты.
+                    </div>
+                  )}
                 </TabsContent>
 
                 <TabsContent value="journal" className="p-4">
-                  <div className="grid gap-4">
-                    <Alert>
-                      <Loader2Icon />
-                      <AlertTitle>Текущий статус</AlertTitle>
-                      <AlertDescription>
-                        Обработка выполняется последовательно, следующий этап
-                        запускается только после подтверждения.
-                      </AlertDescription>
-                    </Alert>
-                    <ScrollArea className="h-[540px] rounded-xl border">
-                      <div className="flex flex-col gap-3 p-4">
-                        {selectedProject.logs.map((entry, index) => (
-                          <div
-                            key={`${selectedProject.id}-log-${index}`}
-                            className="rounded-lg border bg-background px-3 py-2 text-sm"
-                          >
-                            {entry}
-                          </div>
-                        ))}
-                      </div>
-                    </ScrollArea>
-                  </div>
+                  {selectedProject ? (
+                    <div className="grid gap-4">
+                      <Alert>
+                        <Loader2Icon />
+                        <AlertTitle>Текущий статус</AlertTitle>
+                        <AlertDescription>
+                          Обработка выполняется последовательно, следующий этап
+                          запускается только после подтверждения.
+                        </AlertDescription>
+                      </Alert>
+                      <Card size="sm">
+                        <CardHeader>
+                          <CardTitle className="text-base">Логи проекта</CardTitle>
+                        </CardHeader>
+                        <CardContent className="p-0">
+                          <ScrollArea className="h-[280px] rounded-b-xl border-t">
+                            <div className="flex flex-col gap-3 p-4">
+                              {selectedProject.logs.map((entry, index) => (
+                                <div
+                                  key={`${selectedProject.id}-log-${index}`}
+                                  className="rounded-lg border bg-background px-3 py-2 text-sm"
+                                >
+                                  {entry}
+                                </div>
+                              ))}
+                            </div>
+                          </ScrollArea>
+                        </CardContent>
+                      </Card>
+                      <Card size="sm">
+                        <CardHeader>
+                          <CardTitle className="text-base">Jobs</CardTitle>
+                          <CardDescription>
+                            Очередь обработки и повторные запуски.
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className="p-0">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>Этап</TableHead>
+                                <TableHead>Статус</TableHead>
+                                <TableHead>Создан</TableHead>
+                                <TableHead className="text-right">Действия</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {jobs.length ? (
+                                jobs.map((job) => (
+                                  <TableRow key={job.id}>
+                                    <TableCell>{stageLabels[job.stage]}</TableCell>
+                                    <TableCell>
+                                      <Badge variant={stageStatusBadgeVariant(job.status)}>
+                                        {job.status}
+                                      </Badge>
+                                    </TableCell>
+                                    <TableCell className="text-sm text-muted-foreground">
+                                      {new Date(job.createdAt).toLocaleString("ru-RU")}
+                                    </TableCell>
+                                    <TableCell className="text-right">
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        disabled={job.status !== "failed" || mutating}
+                                        onClick={() => void handleRetryJob(job.id)}
+                                      >
+                                        <RefreshCwIcon data-icon="inline-start" />
+                                        Retry
+                                      </Button>
+                                    </TableCell>
+                                  </TableRow>
+                                ))
+                              ) : (
+                                <TableRow>
+                                  <TableCell colSpan={4}>
+                                    <div className="py-10 text-center text-sm text-muted-foreground">
+                                      Пока нет jobs.
+                                    </div>
+                                  </TableCell>
+                                </TableRow>
+                              )}
+                            </TableBody>
+                          </Table>
+                        </CardContent>
+                      </Card>
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border p-10 text-center text-sm text-muted-foreground">
+                      Выберите проект, чтобы увидеть журнал.
+                    </div>
+                  )}
                 </TabsContent>
               </Tabs>
             </CardContent>
