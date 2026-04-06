@@ -86,21 +86,23 @@ export function createS3UploadPartPresignedUrl(input: S3PresignPartInput) {
     .join("/")}`
 
   const credentialScope = `${dateStamp}/${input.region}/s3/aws4_request`
-  const baseQuery: Record<string, string> = {
+  const authQueryParams: Record<string, string> = {
     "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
     "X-Amz-Credential": `${input.accessKeyId}/${credentialScope}`,
     "X-Amz-Date": amzDate,
     "X-Amz-Expires": String(expiresInSeconds),
     "X-Amz-SignedHeaders": "host",
-    partNumber: String(input.partNumber),
-    uploadId: input.uploadId,
   }
 
   if (input.sessionToken) {
-    baseQuery["X-Amz-Security-Token"] = input.sessionToken
+    authQueryParams["X-Amz-Security-Token"] = input.sessionToken
   }
 
-  const canonicalQueryString = canonicalQuery(baseQuery)
+  const canonicalQueryString = canonicalQuery({
+    ...authQueryParams,
+    partNumber: String(input.partNumber),
+    uploadId: input.uploadId,
+  })
   const canonicalHeaders = `host:${endpointUrl.host}\n`
   const signedHeaders = "host"
   const payloadHash = "UNSIGNED-PAYLOAD"
@@ -128,6 +130,7 @@ export function createS3UploadPartPresignedUrl(input: S3PresignPartInput) {
     uploadId: input.uploadId,
     partNumber: String(input.partNumber),
   })
-  const signedQuery = `${operationQuery}&${canonicalQueryString}&X-Amz-Signature=${signature}`
+  const authQuery = canonicalQuery(authQueryParams)
+  const signedQuery = `${operationQuery}&${authQuery}&X-Amz-Signature=${signature}`
   return `${endpointUrl.origin}${canonicalUri}?${signedQuery}`
 }
