@@ -666,6 +666,16 @@ export function EcolmsDashboard() {
     course_test: "Создать тест",
   }
 
+  function isGenerateDisabled(stage: GenerationStage) {
+    if (stage === "course_outline") {
+      return !canGenerateOutline || mutating
+    }
+    if (stage === "course_content") {
+      return !canGenerateContent || mutating
+    }
+    return !canGenerateTest || mutating
+  }
+
   return (
     <>
       <div className="min-h-screen bg-background">
@@ -691,8 +701,8 @@ export function EcolmsDashboard() {
             </Alert>
           ) : null}
 
-          <section className="grid flex-1 grid-cols-[420px_minmax(0,1fr)] gap-4">
-            <Card className="overflow-hidden border-border/80 bg-card">
+          <section className="grid flex-1 grid-cols-[420px_minmax(0,1fr)] items-stretch gap-4">
+            <Card className="flex h-full min-h-[720px] flex-col overflow-hidden border-border/80 bg-card">
               <CardHeader className="border-b bg-secondary/35">
                 <div className="flex items-center justify-between gap-3">
                   <div>
@@ -705,8 +715,8 @@ export function EcolmsDashboard() {
                   </Button>
                 </div>
               </CardHeader>
-              <CardContent className="p-0">
-                <ScrollArea className="h-[calc(100vh-360px)]">
+              <CardContent className="flex min-h-0 flex-1 flex-col p-0">
+                <ScrollArea className="min-h-0 flex-1">
                   <div className="flex flex-col">
                     {listLoading ? (
                       Array.from({ length: 7 }).map((_, index) => (
@@ -715,74 +725,79 @@ export function EcolmsDashboard() {
                         </div>
                       ))
                     ) : projects.length ? (
-                      projects.map((project) => (
-                        <div
-                          key={project.id}
-                          className={cn(
-                            "flex items-stretch border-b border-border/60",
-                            project.id === selectedProject?.id && "bg-muted"
-                          )}
-                        >
-                          <Button
-                            variant="ghost"
-                            className="h-auto flex-1 justify-start rounded-none px-4 py-3 text-left"
+                      <div className="space-y-3 p-3">
+                        {projects.map((project) => (
+                          <button
+                            key={project.id}
+                            type="button"
+                            className={cn(
+                              "w-full rounded-lg border p-4 text-left transition-colors hover:bg-muted/35",
+                              project.id === selectedProject?.id
+                                ? "border-primary/35 bg-muted/30"
+                                : "border-border/70 bg-card"
+                            )}
                             onClick={() => setSelectedId(project.id)}
                           >
-                            <div className="flex w-full flex-col gap-2">
-                              <div className="flex items-start justify-between gap-2">
-                                <div className="flex min-w-0 flex-col gap-1">
-                                  <span className="truncate font-medium">{project.name}</span>
-                                  <span className="line-clamp-2 text-xs text-muted-foreground">
-                                    {project.sourceSummary || "Описание появится после обработки."}
-                                  </span>
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0 space-y-1">
+                                <div className="truncate text-base font-semibold">
+                                  {project.name}
                                 </div>
-                                <Badge variant={projectStatusBadgeVariant(project.status)}>
-                                  {projectStatusLabels[project.status]}
-                                </Badge>
+                                <div className="line-clamp-2 text-sm text-muted-foreground">
+                                  {project.sourceSummary || "Описание появится после обработки."}
+                                </div>
                               </div>
-                              <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                                <span>{stageLabels[project.currentStage]}</span>
-                                <span>{formatDateLabel(project.updatedAt)}</span>
-                              </div>
+                              <DropdownMenu>
+                                <DropdownMenuTrigger
+                                  disabled={mutating}
+                                  className={cn(
+                                    buttonVariants({ variant: "ghost", size: "icon-sm" }),
+                                    "shrink-0"
+                                  )}
+                                  onClick={(event) => event.stopPropagation()}
+                                  onMouseDown={(event) => event.stopPropagation()}
+                                >
+                                  <span className="sr-only">Действия курса</span>
+                                  <MoreHorizontalIcon className="size-4" />
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                  <DropdownMenuItem
+                                    onClick={() => {
+                                      setSelectedId(project.id)
+                                      setEditOpen(true)
+                                    }}
+                                  >
+                                    Редактировать
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    onClick={() => void handleGenerateAllForProject(project.id)}
+                                  >
+                                    Запустить всё автоматически
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    variant="destructive"
+                                    onClick={() => void handleDeleteProject(project)}
+                                  >
+                                    <Trash2Icon data-icon="inline-start" />
+                                    Удалить курс
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
                             </div>
-                          </Button>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger
-                              disabled={mutating}
-                              className={cn(
-                                buttonVariants({ variant: "ghost", size: "icon" }),
-                                "h-auto rounded-none border-l border-border/60 px-3"
-                              )}
-                              onClick={() => setSelectedId(project.id)}
-                            >
-                              <span className="sr-only">Действия курса</span>
-                              <MoreHorizontalIcon className="size-4" />
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem
-                                onClick={() => {
-                                  setSelectedId(project.id)
-                                  setEditOpen(true)
-                                }}
-                              >
-                                Редактировать
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                onClick={() => void handleGenerateAllForProject(project.id)}
-                              >
-                                Запустить всё автоматически
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                onClick={() => void handleDeleteProject(project)}
-                                className="text-destructive focus:text-destructive"
-                              >
-                                <Trash2Icon data-icon="inline-start" />
-                                Удалить курс
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </div>
-                      ))
+                            <div className="mt-3 flex items-center justify-between gap-2">
+                              <span className="text-xs text-muted-foreground">
+                                {stageLabels[project.currentStage]}
+                              </span>
+                              <Badge variant={projectStatusBadgeVariant(project.status)}>
+                                {projectStatusLabels[project.status]}
+                              </Badge>
+                            </div>
+                            <div className="mt-1 text-xs text-muted-foreground">
+                              {formatDateLabel(project.updatedAt)}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
                     ) : (
                       <div className="px-6 py-12 text-center text-sm text-muted-foreground">
                         Курсов пока нет. Создайте первый курс, чтобы начать работу.
@@ -843,7 +858,7 @@ export function EcolmsDashboard() {
               </CardContent>
             </Card>
 
-            <Card className="overflow-hidden border-border/80 bg-card">
+            <Card className="flex h-full min-h-[720px] flex-col overflow-hidden border-border/80 bg-card">
               {!selectedProject && !detailLoading ? (
                 <CardContent className="flex h-full min-h-[640px] items-center justify-center">
                   <div className="max-w-md space-y-2 text-center">
@@ -885,134 +900,138 @@ export function EcolmsDashboard() {
                     </div>
                   ) : null}
 
-                  <CardContent className="space-y-4 p-4">
-                    <div className="grid grid-cols-[320px_minmax(0,1fr)] gap-4">
-                      <Card>
-                        <CardHeader>
-                          <CardTitle>Материалы курса</CardTitle>
-                          <CardDescription>
-                            Выберите блок и запустите генерацию по шагам.
-                          </CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-2">
+                  <CardContent className="flex-1 space-y-4 p-4">
+                    <Card className="flex h-full min-h-[620px] flex-col">
+                      <CardHeader className="space-y-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="space-y-1">
+                            <CardTitle>{stageLabels[selectedStage]}</CardTitle>
+                            <CardDescription>
+                              Выберите раздел в горизонтальном списке и работайте с его содержимым.
+                            </CardDescription>
+                          </div>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger
+                              disabled={detailLoading || mutating || !currentStageArtifact}
+                              className={buttonVariants({ variant: "outline" })}
+                            >
+                              <MoreHorizontalIcon data-icon="inline-start" />
+                              Действия
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem
+                                onClick={() => setIsEditing((current) => !current)}
+                              >
+                                {isEditing ? "Просмотр" : "Редактировать"}
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => void handleSaveDraft()}>
+                                <SaveIcon data-icon="inline-start" />
+                                Сохранить
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-3">
                           {VISIBLE_STAGES.map((stage) => {
                             const stageStatus =
                               selectedProject.stages.find((item) => item.id === stage)?.status ??
                               "queued"
-                            const disabledCreate =
-                              stage === "course_outline"
-                                ? !canGenerateOutline
-                                : stage === "course_content"
-                                  ? !canGenerateContent
-                                  : !canGenerateTest
 
                             return (
-                              <div
+                              <button
                                 key={stage}
+                                type="button"
                                 className={cn(
-                                  "border px-3 py-3",
-                                  selectedStage === stage && "border-primary/60 bg-muted/20"
+                                  "w-full rounded-lg border p-3 text-left transition-colors hover:bg-muted/35",
+                                  selectedStage === stage
+                                    ? "border-primary/35 bg-muted/30"
+                                    : "border-border/70 bg-card"
                                 )}
+                                onClick={() => {
+                                  setSelectedStage(stage)
+                                  setIsEditing(false)
+                                }}
                               >
-                                <button
-                                  type="button"
-                                  className="flex w-full items-start justify-between text-left"
-                                  onClick={() => {
-                                    setSelectedStage(stage)
-                                    setIsEditing(false)
-                                  }}
-                                >
+                                <div className="flex items-start justify-between gap-2">
                                   <div className="space-y-1">
-                                    <div className="font-medium">{stageLabels[stage]}</div>
+                                    <div className="text-sm font-medium">{stageLabels[stage]}</div>
                                     <div className="text-xs text-muted-foreground">
                                       {stageStatus === "done"
                                         ? "Сгенерировано"
                                         : "Ещё не сгенерировано"}
                                     </div>
                                   </div>
+                                  <DropdownMenu>
+                                    <DropdownMenuTrigger
+                                      disabled={mutating}
+                                      className={cn(
+                                        buttonVariants({ variant: "ghost", size: "icon-xs" }),
+                                        "shrink-0"
+                                      )}
+                                      onClick={(event) => event.stopPropagation()}
+                                      onMouseDown={(event) => event.stopPropagation()}
+                                    >
+                                      <span className="sr-only">
+                                        Действия раздела {stageLabels[stage]}
+                                      </span>
+                                      <MoreHorizontalIcon className="size-3.5" />
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end">
+                                      <DropdownMenuItem
+                                        onClick={() => {
+                                          setSelectedStage(stage)
+                                          setIsEditing(false)
+                                        }}
+                                      >
+                                        Открыть раздел
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem
+                                        disabled={isGenerateDisabled(stage)}
+                                        onClick={() => void handleGenerate(stage)}
+                                      >
+                                        <FileTextIcon data-icon="inline-start" />
+                                        {generationLabelByStage[stage]}
+                                      </DropdownMenuItem>
+                                    </DropdownMenuContent>
+                                  </DropdownMenu>
+                                </div>
+                                <div className="mt-3 flex items-center justify-between gap-2">
                                   <Badge variant={stageStatus === "done" ? "default" : "outline"}>
                                     {stageStatus === "done" ? "Готов" : "Ожидает"}
                                   </Badge>
-                                </button>
-                                <div className="mt-3">
-                                  <Button
-                                    size="sm"
-                                    variant={stageStatus === "done" ? "outline" : "default"}
-                                    onClick={() => void handleGenerate(stage)}
-                                    disabled={disabledCreate || mutating}
-                                  >
-                                    {generationLabelByStage[stage]}
-                                  </Button>
                                 </div>
-                              </div>
+                              </button>
                             )
                           })}
-                        </CardContent>
-                      </Card>
-
-                      <Card>
-                        <CardHeader>
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="space-y-1">
-                              <CardTitle>{stageLabels[selectedStage]}</CardTitle>
-                              <CardDescription>
-                                Можно редактировать и сохранять итоговый текст этапа.
-                              </CardDescription>
-                            </div>
-                            <DropdownMenu>
-                              <DropdownMenuTrigger
-                                disabled={detailLoading || mutating || !currentStageArtifact}
-                                className={buttonVariants({ variant: "outline" })}
-                              >
-                                <MoreHorizontalIcon data-icon="inline-start" />
-                                Действия
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                <DropdownMenuItem
-                                  onClick={() => setIsEditing((current) => !current)}
-                                >
-                                  {isEditing ? "Просмотр" : "Редактировать"}
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => void handleSaveDraft()}>
-                                  <SaveIcon data-icon="inline-start" />
-                                  Сохранить
-                                </DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="flex-1 space-y-4">
+                        {isEditing ? (
+                          <Textarea
+                            value={editorValue}
+                            onChange={(event) => setEditorValue(event.target.value)}
+                            className="min-h-[620px] font-mono text-sm"
+                          />
+                        ) : (
+                          <div className="min-h-[620px] border border-border bg-muted/20 p-4">
+                            <pre className="whitespace-pre-wrap text-sm leading-6 text-foreground">
+                              {editorValue || "Пока нет данных для выбранного этапа."}
+                            </pre>
                           </div>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                          {isEditing ? (
-                            <Textarea
-                              value={editorValue}
-                              onChange={(event) => setEditorValue(event.target.value)}
-                              className="min-h-[520px] font-mono text-sm"
-                            />
-                          ) : (
-                            <div className="min-h-[520px] border border-border bg-muted/20 p-4">
-                              <pre className="whitespace-pre-wrap text-sm leading-6 text-foreground">
-                                {editorValue || "Пока нет данных для выбранного этапа."}
-                              </pre>
-                            </div>
-                          )}
-                          <div className="flex gap-2">
-                            <Button
-                              variant="outline"
-                              onClick={() => void handleGenerate(selectedStage)}
-                              disabled={
-                                (selectedStage === "course_outline" && !canGenerateOutline) ||
-                                (selectedStage === "course_content" && !canGenerateContent) ||
-                                (selectedStage === "course_test" && !canGenerateTest) ||
-                                mutating
-                              }
-                            >
-                              <FileTextIcon data-icon="inline-start" />
-                              {generationLabelByStage[selectedStage]}
-                            </Button>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    </div>
+                        )}
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            onClick={() => void handleGenerate(selectedStage)}
+                            disabled={isGenerateDisabled(selectedStage)}
+                          >
+                            <FileTextIcon data-icon="inline-start" />
+                            {generationLabelByStage[selectedStage]}
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
                   </CardContent>
                 </>
               ) : null}
