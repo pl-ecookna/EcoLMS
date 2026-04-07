@@ -14,7 +14,7 @@ export const stageLabels: Record<StageId, string> = {
 
 export const projectStatusLabels: Record<ProjectStatus, string> = {
   draft: "Черновик",
-  uploaded: "Загружен",
+  uploaded: "Создан",
   processing: "В обработке",
   awaiting_review: "На проверке",
   completed: "Готов",

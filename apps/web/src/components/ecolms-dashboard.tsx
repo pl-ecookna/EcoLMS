@@ -581,10 +581,6 @@ export function EcolmsDashboard() {
                 <h1 className="font-heading text-3xl font-semibold tracking-tight sm:text-4xl">
                   Курсы и пайплайн генерации
                 </h1>
-                <p className="max-w-3xl text-sm text-muted-foreground sm:text-base">
-                  Рабочий экран для создания курсов, загрузки исходников и
-                  контроля генерации плана, материалов и теста.
-                </p>
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -645,10 +641,6 @@ export function EcolmsDashboard() {
           <Card className="overflow-hidden">
             <CardHeader className="border-b">
               <CardTitle>Таблица курсов</CardTitle>
-              <CardDescription>
-                Выберите курс из строки таблицы, чтобы открыть детали, файлы и
-                этапы генерации в боковой панели.
-              </CardDescription>
             </CardHeader>
             <CardContent className="p-0">
               <Table>
@@ -656,8 +648,6 @@ export function EcolmsDashboard() {
                   <TableRow>
                     <TableHead className="min-w-[240px]">Курс</TableHead>
                     <TableHead>Статус</TableHead>
-                    <TableHead>Текущий этап</TableHead>
-                    <TableHead className="min-w-[180px]">Прогресс</TableHead>
                     <TableHead>Файлы</TableHead>
                     <TableHead>План</TableHead>
                     <TableHead>Материалы</TableHead>
@@ -670,7 +660,7 @@ export function EcolmsDashboard() {
                   {listLoading ? (
                     Array.from({ length: 6 }).map((_, index) => (
                       <TableRow key={index}>
-                        <TableCell colSpan={10}>
+                        <TableCell colSpan={8}>
                           <div className="flex items-center gap-3 py-2">
                             <Skeleton className="h-10 w-full" />
                           </div>
@@ -700,21 +690,6 @@ export function EcolmsDashboard() {
                           <Badge variant={projectStatusBadgeVariant(project.status)}>
                             {projectStatusLabels[project.status]}
                           </Badge>
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">
-                          {stageLabels[project.currentStage]}
-                        </TableCell>
-                        <TableCell>
-                          <div className="min-w-[160px]">
-                            <Progress value={project.progress} className="flex-col gap-1.5">
-                              <ProgressLabel className="text-xs text-muted-foreground">
-                                Готовность пакета
-                              </ProgressLabel>
-                              <ProgressValue className="ml-0 text-xs">
-                                {(_, value) => `${value ?? 0}%`}
-                              </ProgressValue>
-                            </Progress>
-                          </div>
                         </TableCell>
                         <TableCell>
                           <ArtifactPresenceBadge
@@ -753,7 +728,7 @@ export function EcolmsDashboard() {
                     ))
                   ) : (
                     <TableRow>
-                      <TableCell colSpan={10}>
+                      <TableCell colSpan={8}>
                         <div className="py-12 text-center text-sm text-muted-foreground">
                           Курсов пока нет. Создайте первый курс и загрузите
                           исходные материалы.
@@ -969,15 +944,7 @@ export function EcolmsDashboard() {
 
                 <TabsContent value="overview" className="p-4">
                   <div className="flex flex-col gap-6">
-                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                      <Card size="sm">
-                        <CardHeader>
-                          <CardDescription>Текущий этап</CardDescription>
-                          <CardTitle className="text-base">
-                            {stageLabels[selectedProject.currentStage]}
-                          </CardTitle>
-                        </CardHeader>
-                      </Card>
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                       <Card size="sm">
                         <CardHeader>
                           <CardDescription>Файлов в курсе</CardDescription>
@@ -1002,20 +969,12 @@ export function EcolmsDashboard() {
 
                     <Card>
                       <CardHeader>
-                        <CardTitle>Готовность курса</CardTitle>
+                        <CardTitle>Действия по курсу</CardTitle>
                         <CardDescription>
-                          Прогресс полного пакета и основные действия по курсу.
+                          Основные действия для обновления, запуска и выгрузки артефактов.
                         </CardDescription>
                       </CardHeader>
                       <CardContent className="flex flex-col gap-4">
-                        <Progress value={selectedProject.progress} className="flex-col gap-2">
-                          <ProgressLabel>Готовность полного пакета</ProgressLabel>
-                          <ProgressValue>
-                            {(formattedValue, value) =>
-                              `${formattedValue ?? value ?? 0}%`
-                            }
-                          </ProgressValue>
-                        </Progress>
                         <div className="flex flex-wrap gap-2">
                           <Button
                             variant="outline"
@@ -1252,9 +1211,6 @@ export function EcolmsDashboard() {
                       <CardContent className="flex flex-col gap-4">
                         <div className="flex flex-wrap items-center gap-2">
                           <Badge variant="outline">Markdown</Badge>
-                          <Badge variant="secondary">
-                            {stageLabels[selectedProject.currentStage]}
-                          </Badge>
                         </div>
                         <Textarea
                           value={editorValue}
