@@ -216,7 +216,11 @@ export async function getProject(projectId: string) {
   return requestJson<ProjectDetailRecord>(`/api/projects/${projectId}`)
 }
 
-export async function createProject(input: { githubRef: string; note?: string }) {
+export async function createProject(input: {
+  name?: string
+  githubRef?: string
+  note?: string
+}) {
   return requestJson<ProjectDetailRecord>(`/api/projects`, {
     method: "POST",
     body: JSON.stringify(input),

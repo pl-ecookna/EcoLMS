@@ -372,10 +372,13 @@ export class EcolmsStore {
     return this.loadProjectDetail(id)
   }
 
-  async createProject(input: { githubRef: string; note?: string }) {
+  async createProject(input: { name?: string; githubRef?: string; note?: string }) {
     const id = makeProjectId()
-    const name = `${makeNameFromGithubRef(input.githubRef)} ${id.slice(-4)}`
-    const sourceSummary = input.note ?? "Новый проект, ожидающий загрузки материалов"
+    const trimmedName = input.name?.trim()
+    const githubRef = input.githubRef?.trim() || `manual://${id}`
+    const name =
+      trimmedName || `${makeNameFromGithubRef(githubRef)} ${id.slice(-4)}`
+    const sourceSummary = input.note ?? "Новый курс, ожидающий загрузки материалов"
     const stageDrafts = buildDrafts(name, input.note ?? "нового обучающего курса")
     const now = nowIso()
 
@@ -392,12 +395,16 @@ export class EcolmsStore {
         [
           id,
           name,
-          input.githubRef,
+          githubRef,
           sourceSummary,
           now,
-          "Создан новый проект. После загрузки файлов можно запускать обработку.",
+          "Создан новый курс. После загрузки файлов можно запускать обработку.",
           JSON.stringify(stageDrafts),
-          JSON.stringify(["Проект создан из GitHub-источника."]),
+          JSON.stringify([
+            trimmedName
+              ? "Курс создан вручную."
+              : "Курс создан из GitHub-источника.",
+          ]),
         ]
       )
 

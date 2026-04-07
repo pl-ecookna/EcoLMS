@@ -4,11 +4,10 @@ import { useEffect, useMemo, useState } from "react"
 import {
   AlertCircleIcon,
   CheckCircle2Icon,
+  ChevronRightIcon,
   FileDownIcon,
   FileTextIcon,
-  FolderGit2Icon,
   Loader2Icon,
-  MoreHorizontalIcon,
   PencilLineIcon,
   PlusIcon,
   PlayIcon,
@@ -28,15 +27,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -50,6 +40,15 @@ import {
 import { Progress, ProgressLabel, ProgressValue } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
   TableBody,
@@ -72,22 +71,24 @@ import {
   initUpload,
   listProjects,
   projectStatusLabels,
-  startProject,
   retryJob,
   signUploadPart,
   stageLabels,
+  stageOrder,
+  startProject,
   updateArtifact,
+  type ProcessingJobRecord,
   type ProjectDetailRecord,
   type ProjectRecord,
   type ProjectStatus,
   type StageId,
-  type ProcessingJobRecord,
 } from "@/lib/ecolms-api"
 
 const PAGE_SIZE = 25
 const PART_SIZE_BYTES = 10 * 1024 * 1024
 
 type UploadPhase = "idle" | "uploading" | "done" | "error"
+type UploadContext = "create" | "detail" | null
 
 function projectStatusBadgeVariant(
   status: ProjectStatus
@@ -119,16 +120,6 @@ function stageStatusBadgeVariant(status: ProcessingJobRecord["status"]) {
     default:
       return "outline" as const
   }
-}
-
-function makeGithubName(value: string) {
-  const cleaned = value
-    .replace(/^https?:\/\//, "")
-    .replace(/^www\./, "")
-    .replace(/\/$/, "")
-
-  const slug = cleaned.split("/").filter(Boolean).at(-1) || "project"
-  return slug.replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim()
 }
 
 function fileKind(file: File) {
@@ -175,6 +166,58 @@ function latestJobs(jobs: ProcessingJobRecord[]) {
   )
 }
 
+function formatDateLabel(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
+
+  return new Intl.DateTimeFormat("ru-RU", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date)
+}
+
+function stageReached(project: ProjectRecord, stage: StageId) {
+  return stageOrder.indexOf(project.currentStage) >= stageOrder.indexOf(stage)
+}
+
+function stageBadgeLabel(status: ProcessingJobRecord["status"]) {
+  switch (status) {
+    case "done":
+      return "Готов"
+    case "processing":
+      return "В работе"
+    case "failed":
+      return "Ошибка"
+    default:
+      return "Ожидает"
+  }
+}
+
+function sourceFileStatusLabel(status: string) {
+  switch (status) {
+    case "completed":
+      return "Загружен"
+    case "uploading":
+      return "Выгружается"
+    case "aborted":
+      return "Прерван"
+    default:
+      return "Ожидает"
+  }
+}
+
+function ArtifactPresenceBadge({
+  label,
+  present,
+}: {
+  label: string
+  present: boolean
+}) {
+  return <Badge variant={present ? "secondary" : "outline"}>{label}</Badge>
+}
+
 export function EcolmsDashboard() {
   const [projects, setProjects] = useState<ProjectRecord[]>([])
   const [projectTotal, setProjectTotal] = useState(0)
@@ -186,29 +229,36 @@ export function EcolmsDashboard() {
   const [editorValue, setEditorValue] = useState("")
   const [isEditing, setIsEditing] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
-  const [githubRef, setGithubRef] = useState("")
-  const [projectNote, setProjectNote] = useState("")
-  const [selectedFiles, setSelectedFiles] = useState<File[]>([])
+  const [detailOpen, setDetailOpen] = useState(false)
+  const [courseName, setCourseName] = useState("")
+  const [courseNote, setCourseNote] = useState("")
+  const [createFiles, setCreateFiles] = useState<File[]>([])
+  const [detailFiles, setDetailFiles] = useState<File[]>([])
   const [listLoading, setListLoading] = useState(true)
   const [detailLoading, setDetailLoading] = useState(false)
   const [mutating, setMutating] = useState(false)
   const [uploadPhase, setUploadPhase] = useState<UploadPhase>("idle")
+  const [uploadContext, setUploadContext] = useState<UploadContext>(null)
   const [uploadMessage, setUploadMessage] = useState("")
   const [uploadProgress, setUploadProgress] = useState(0)
   const [listError, setListError] = useState<string | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
 
   const totalPages = Math.max(1, Math.ceil(projectTotal / PAGE_SIZE))
-  const pageProjects = useMemo(() => projects, [projects])
+  const currentStageArtifact = getStageArtifact(
+    selectedProject,
+    selectedStage,
+    "md"
+  )
   const jobs = useMemo(
     () => latestJobs(selectedProject?.jobs ?? []),
     [selectedProject]
   )
-  const currentStageArtifact = getStageArtifact(selectedProject, selectedStage, "md")
 
   async function refreshProjects(nextPage = page) {
     setListLoading(true)
     setListError(null)
+
     try {
       const response = await listProjects(nextPage, PAGE_SIZE)
       setProjects(response.items)
@@ -225,7 +275,7 @@ export function EcolmsDashboard() {
         setSelectedId(response.items[0]?.id ?? null)
       }
     } catch (error) {
-      setListError(error instanceof Error ? error.message : "Не удалось загрузить проекты")
+      setListError(error instanceof Error ? error.message : "Не удалось загрузить курсы")
     } finally {
       setListLoading(false)
     }
@@ -234,6 +284,7 @@ export function EcolmsDashboard() {
   async function refreshProject(projectId: string) {
     setDetailLoading(true)
     setDetailError(null)
+
     try {
       const response = await getProject(projectId)
       setSelectedProject(response)
@@ -242,7 +293,7 @@ export function EcolmsDashboard() {
       setIsEditing(false)
       return response
     } catch (error) {
-      setDetailError(error instanceof Error ? error.message : "Не удалось загрузить проект")
+      setDetailError(error instanceof Error ? error.message : "Не удалось загрузить курс")
       throw error
     } finally {
       setDetailLoading(false)
@@ -258,6 +309,7 @@ export function EcolmsDashboard() {
     if (!selectedId) {
       return
     }
+
     void refreshProject(selectedId)
   }, [selectedId])
 
@@ -265,6 +317,7 @@ export function EcolmsDashboard() {
     if (!selectedProject) {
       return
     }
+
     setSelectedStage(selectedProject.currentStage)
     setEditorValue(getStageMarkdown(selectedProject, selectedProject.currentStage))
     setIsEditing(false)
@@ -274,55 +327,41 @@ export function EcolmsDashboard() {
     if (!selectedProject) {
       return
     }
+
     setEditorValue(getStageMarkdown(selectedProject, selectedStage))
   }, [selectedProject, selectedStage])
 
-  async function handleCreateProject() {
-    if (!githubRef.trim()) {
-      return
-    }
-
-    setMutating(true)
-    try {
-      const created = await createProject({
-        githubRef: githubRef.trim(),
-        note: projectNote.trim() || undefined,
-      })
-
-      setCreateOpen(false)
-      setGithubRef("")
-      setProjectNote("")
-      setSelectedFiles([])
-      setPage(1)
-      setSelectedId(created.id)
-      setSelectedProject(created)
-      setSelectedStage(created.currentStage)
-      setEditorValue(getStageMarkdown(created, created.currentStage))
-
-      await refreshProjects(1)
-    } finally {
-      setMutating(false)
-    }
+  function resetUploadState() {
+    setUploadPhase("idle")
+    setUploadContext(null)
+    setUploadMessage("")
+    setUploadProgress(0)
   }
 
-  async function handleUploadFiles() {
-    if (!selectedProject || selectedFiles.length === 0) {
+  async function uploadFilesForProject(
+    projectId: string,
+    files: File[],
+    context: Exclude<UploadContext, null>,
+    nextPage = page
+  ) {
+    if (files.length === 0) {
       return
     }
 
+    setUploadContext(context)
     setUploadPhase("uploading")
-    setUploadMessage("Инициализируем multipart upload")
+    setUploadMessage("Инициализируем загрузку файлов")
     setUploadProgress(0)
 
-    const totalChunks = selectedFiles.reduce(
+    const totalChunks = files.reduce(
       (sum, file) => sum + Math.max(1, Math.ceil(file.size / PART_SIZE_BYTES)),
       0
     )
     let completedChunks = 0
 
     try {
-      for (const file of selectedFiles) {
-        const init = await initUpload(selectedProject.id, {
+      for (const file of files) {
+        const init = await initUpload(projectId, {
           fileName: file.name,
           fileSize: file.size,
           mimeType: file.type || "application/octet-stream",
@@ -369,17 +408,67 @@ export function EcolmsDashboard() {
 
       setUploadPhase("done")
       setUploadMessage("Файлы загружены")
-      setSelectedFiles([])
-
-      await refreshProjects(page)
-      if (selectedProject?.id) {
-        await refreshProject(selectedProject.id)
-      }
+      await refreshProjects(nextPage)
+      await refreshProject(projectId)
     } catch (error) {
       setUploadPhase("error")
       setUploadMessage(
         error instanceof Error ? error.message : "Не удалось загрузить файлы"
       )
+      throw error
+    }
+  }
+
+  async function handleCreateCourse() {
+    if (!courseName.trim()) {
+      return
+    }
+
+    setMutating(true)
+    setListError(null)
+
+    try {
+      const created = await createProject({
+        name: courseName.trim(),
+        note: courseNote.trim() || undefined,
+      })
+
+      setSelectedId(created.id)
+      setSelectedProject(created)
+      setSelectedStage(created.currentStage)
+      setEditorValue(getStageMarkdown(created, created.currentStage))
+      setPage(1)
+
+      if (createFiles.length > 0) {
+        await uploadFilesForProject(created.id, createFiles, "create", 1)
+      } else {
+        await refreshProjects(1)
+        await refreshProject(created.id)
+      }
+
+      setCourseName("")
+      setCourseNote("")
+      setCreateFiles([])
+      setCreateOpen(false)
+      setDetailOpen(true)
+      resetUploadState()
+    } catch (error) {
+      setListError(error instanceof Error ? error.message : "Не удалось создать курс")
+    } finally {
+      setMutating(false)
+    }
+  }
+
+  async function handleUploadFiles() {
+    if (!selectedProject || detailFiles.length === 0) {
+      return
+    }
+
+    try {
+      await uploadFilesForProject(selectedProject.id, detailFiles, "detail", page)
+      setDetailFiles([])
+    } catch {
+      return
     }
   }
 
@@ -399,18 +488,13 @@ export function EcolmsDashboard() {
   }
 
   async function handleSaveDraft() {
-    if (!selectedProject) {
-      return
-    }
-
-    const artifact = currentStageArtifact
-    if (!artifact) {
+    if (!selectedProject || !currentStageArtifact) {
       return
     }
 
     setMutating(true)
     try {
-      await updateArtifact(selectedProject.id, artifact.id, editorValue)
+      await updateArtifact(selectedProject.id, currentStageArtifact.id, editorValue)
       await refreshProjects(page)
       await refreshProject(selectedProject.id)
     } finally {
@@ -419,18 +503,13 @@ export function EcolmsDashboard() {
   }
 
   async function handleApproveStage() {
-    if (!selectedProject) {
-      return
-    }
-
-    const artifact = currentStageArtifact
-    if (!artifact) {
+    if (!selectedProject || !currentStageArtifact) {
       return
     }
 
     setMutating(true)
     try {
-      const response = await approveArtifact(selectedProject.id, artifact.id)
+      const response = await approveArtifact(selectedProject.id, currentStageArtifact.id)
       setSelectedProject(response.project)
       setSelectedId(response.project.id)
       setSelectedStage(response.project.currentStage)
@@ -475,497 +554,707 @@ export function EcolmsDashboard() {
       (project) => project.status === "awaiting_review"
     ).length
     const completed = projects.filter((project) => project.status === "completed").length
+    const withFiles = projects.filter((project) => project.sourceFiles.length > 0).length
+
     return {
       total: projectTotal,
       awaiting,
       completed,
+      withFiles,
     }
   }, [projectTotal, projects])
 
+  const createUploadVisible = uploadContext === "create" && uploadPhase !== "idle"
+  const detailUploadVisible = uploadContext === "detail" && uploadPhase !== "idle"
+
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(0,0,0,0.05),_transparent_28%),radial-gradient(circle_at_top_right,_rgba(0,0,0,0.03),_transparent_22%)]">
-      <div className="mx-auto flex min-h-screen w-full max-w-[1680px] flex-col gap-6 px-4 py-5 sm:px-6 lg:px-8">
-        <header className="flex flex-col gap-4 border-b border-border/60 pb-5 lg:flex-row lg:items-end lg:justify-between">
-          <div className="flex flex-col gap-3">
-            <div className="flex items-center gap-3 text-xs uppercase tracking-[0.2em] text-muted-foreground">
-              <SparklesIcon className="size-4" />
-              EcoLMS
+    <>
+      <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(15,23,42,0.06),_transparent_24%),linear-gradient(180deg,_rgba(248,250,252,0.96)_0%,_rgba(255,255,255,1)_22%)]">
+        <div className="mx-auto flex min-h-screen w-full max-w-[1680px] flex-col gap-6 px-4 py-5 sm:px-6 lg:px-8">
+          <header className="flex flex-col gap-4 border-b border-border/70 pb-5 lg:flex-row lg:items-end lg:justify-between">
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center gap-3 text-xs uppercase tracking-[0.24em] text-muted-foreground">
+                <SparklesIcon className="size-4" />
+                EcoLMS
+              </div>
+              <div className="flex flex-col gap-2">
+                <h1 className="font-heading text-3xl font-semibold tracking-tight sm:text-4xl">
+                  Курсы и пайплайн генерации
+                </h1>
+                <p className="max-w-3xl text-sm text-muted-foreground sm:text-base">
+                  Рабочий экран для создания курсов, загрузки исходников и
+                  контроля генерации плана, материалов и теста.
+                </p>
+              </div>
             </div>
-            <div className="flex flex-col gap-2">
-              <h1 className="font-heading text-3xl font-semibold tracking-tight sm:text-4xl">
-                Управление курсами и этапами генерации
-              </h1>
-              <p className="max-w-2xl text-sm text-muted-foreground sm:text-base">
-                Внутренний контур для загрузки материалов, ручной проверки
-                Markdown и последовательной генерации курса, материалов и теста.
-              </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  void refreshProjects(page)
+                  if (selectedProject?.id) {
+                    void refreshProject(selectedProject.id)
+                  }
+                }}
+              >
+                <RefreshCwIcon data-icon="inline-start" />
+                Обновить
+              </Button>
+              <Button onClick={() => setCreateOpen(true)}>
+                <PlusIcon data-icon="inline-start" />
+                Создать курс
+              </Button>
             </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              variant="outline"
-              onClick={() => {
-                void refreshProjects(page)
-                if (selectedProject?.id) {
-                  void refreshProject(selectedProject.id)
-                }
-              }}
-            >
-              <RefreshCwIcon data-icon="inline-start" />
-              Обновить
-            </Button>
-            <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-              <DialogTrigger
-                render={
-                  <Button>
-                    <PlusIcon data-icon="inline-start" />
-                    Новый проект
-                  </Button>
-                }
-              />
-              <DialogContent className="sm:max-w-[560px]">
-                <DialogHeader>
-                  <DialogTitle>Создать проект</DialogTitle>
-                  <DialogDescription>
-                    Название проекта будет собрано автоматически из GitHub-источника.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="grid gap-4">
-                  <div className="grid gap-2">
-                    <Label htmlFor="github-url">GitHub-источник</Label>
-                    <Input
-                      id="github-url"
-                      value={githubRef}
-                      onChange={(event) => setGithubRef(event.target.value)}
-                      placeholder="https://github.com/..."
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="project-name">Предпросмотр имени</Label>
-                    <Input
-                      id="project-name"
-                      value={makeGithubName(githubRef) || "Будет рассчитано автоматически"}
-                      readOnly
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label htmlFor="project-note">Комментарий</Label>
-                    <Textarea
-                      id="project-note"
-                      placeholder="Например: материалы по продаже и монтажу изделий для отдела продаж."
-                      className="min-h-24"
-                      value={projectNote}
-                      onChange={(event) => setProjectNote(event.target.value)}
-                    />
-                  </div>
-                </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setCreateOpen(false)}>
-                    Отмена
-                  </Button>
-                  <Button onClick={() => void handleCreateProject()} disabled={mutating}>
-                    {mutating ? "Создаём..." : "Создать"}
-                  </Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
-          </div>
-        </header>
+          </header>
 
-        <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <Card size="sm">
-            <CardHeader>
-              <CardDescription>Всего проектов</CardDescription>
-              <CardTitle>{summary.total}</CardTitle>
-            </CardHeader>
-          </Card>
-          <Card size="sm">
-            <CardHeader>
-              <CardDescription>На проверке</CardDescription>
-              <CardTitle>{summary.awaiting}</CardTitle>
-            </CardHeader>
-          </Card>
-          <Card size="sm">
-            <CardHeader>
-              <CardDescription>Готовые пакеты</CardDescription>
-              <CardTitle>{summary.completed}</CardTitle>
-            </CardHeader>
-          </Card>
-          <Card size="sm">
-            <CardHeader>
-              <CardDescription>Файлы в текущей партии</CardDescription>
-              <CardTitle>{selectedFiles.length}/5</CardTitle>
-            </CardHeader>
-          </Card>
-        </section>
-
-        {listError ? (
-          <Alert>
-            <AlertCircleIcon />
-            <AlertTitle>Не удалось загрузить список проектов</AlertTitle>
-            <AlertDescription>{listError}</AlertDescription>
-          </Alert>
-        ) : null}
-
-        <div className="grid gap-6 xl:grid-cols-[380px_minmax(0,1fr)]">
-          <div className="flex flex-col gap-6">
-            <Card>
+          <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <Card size="sm">
               <CardHeader>
-                <CardTitle>Загрузка файлов</CardTitle>
-                <CardDescription>
-                  До 5 файлов в проекте, прямой multipart upload в Beget S3.
-                </CardDescription>
+                <CardDescription>Всего курсов</CardDescription>
+                <CardTitle>{summary.total}</CardTitle>
               </CardHeader>
-              <CardContent className="flex flex-col gap-4">
-                <Alert>
-                  <AlertCircleIcon />
-                  <AlertTitle>Политика хранения</AlertTitle>
-                  <AlertDescription>
-                    Очистка артефактов выполняется раз в неделю только для
-                    проектов, у которых уже собран полный пакет.
-                  </AlertDescription>
-                </Alert>
-                <div className="grid gap-2">
-                  <Label htmlFor="project-files">Добавить файлы</Label>
-                  <Input
-                    id="project-files"
-                    type="file"
-                    multiple
-                    onChange={(event) =>
-                      setSelectedFiles(Array.from(event.target.files ?? []))
-                    }
-                  />
-                </div>
-                <Progress value={uploadProgress} className="flex flex-col gap-2">
-                  <ProgressLabel>Подготовка загрузки</ProgressLabel>
-                  <ProgressValue>
-                    {(formattedValue, value) =>
-                      `${formattedValue ?? value ?? 0}%`
-                    }
-                  </ProgressValue>
-                </Progress>
-                {uploadMessage ? (
-                  <div className="text-xs text-muted-foreground">{uploadMessage}</div>
-                ) : null}
-                <div className="flex flex-wrap gap-2">
-                  {selectedFiles.length ? (
-                    selectedFiles.map((file) => (
-                      <Badge key={file.name} variant="secondary">
-                        {file.name}
-                      </Badge>
-                    ))
-                  ) : (
-                    <Badge variant="outline">Файлы еще не выбраны</Badge>
-                  )}
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    variant="outline"
-                    disabled={!selectedProject || !selectedFiles.length || uploadPhase === "uploading"}
-                    onClick={() => void handleUploadFiles()}
-                  >
-                    <UploadIcon data-icon="inline-start" />
-                    {uploadPhase === "uploading" ? "Загрузка..." : "Загрузить в S3"}
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    disabled={!selectedProject || !selectedProject.sourceFiles.length || mutating}
-                    onClick={() => void handleStartProject()}
-                  >
-                    <PlayIcon data-icon="inline-start" />
-                    Запустить обработку
-                  </Button>
-                </div>
-              </CardContent>
             </Card>
-
-            <Card className="flex-1">
-              <CardHeader className="border-b">
-                <CardTitle>Проекты</CardTitle>
-                <CardDescription>
-                  Страница показывает по 25 карточек. Для внутреннего MVP этого
-                  достаточно.
-                </CardDescription>
+            <Card size="sm">
+              <CardHeader>
+                <CardDescription>На проверке</CardDescription>
+                <CardTitle>{summary.awaiting}</CardTitle>
               </CardHeader>
-              <CardContent className="p-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Проект</TableHead>
-                      <TableHead>Статус</TableHead>
-                      <TableHead className="text-right">Этап</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {listLoading ? (
-                      Array.from({ length: 5 }).map((_, index) => (
-                        <TableRow key={index}>
-                          <TableCell colSpan={3}>
-                            <div className="flex items-center gap-3 py-1">
-                              <div className="h-4 w-36 animate-pulse rounded bg-muted" />
-                              <div className="h-4 w-20 animate-pulse rounded bg-muted" />
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    ) : pageProjects.length ? (
-                      pageProjects.map((project) => (
-                        <TableRow
-                          key={project.id}
-                          data-state={project.id === selectedProject?.id ? "selected" : undefined}
-                          className="cursor-pointer"
-                          onClick={() => setSelectedId(project.id)}
-                        >
-                          <TableCell className="max-w-[190px]">
-                            <div className="flex flex-col gap-1">
-                              <span className="truncate font-medium">{project.name}</span>
-                              <span className="truncate text-xs text-muted-foreground">
-                                {project.sourceSummary}
-                              </span>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant={projectStatusBadgeVariant(project.status)}>
-                              {projectStatusLabels[project.status]}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-right text-xs text-muted-foreground">
-                            {stageLabels[project.currentStage]}
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    ) : (
-                      <TableRow>
-                        <TableCell colSpan={3}>
-                          <div className="py-10 text-center text-sm text-muted-foreground">
-                            Проектов пока нет. Создайте первый проект или обновите список.
+            </Card>
+            <Card size="sm">
+              <CardHeader>
+                <CardDescription>Готово</CardDescription>
+                <CardTitle>{summary.completed}</CardTitle>
+              </CardHeader>
+            </Card>
+            <Card size="sm">
+              <CardHeader>
+                <CardDescription>С загруженными файлами</CardDescription>
+                <CardTitle>{summary.withFiles}</CardTitle>
+              </CardHeader>
+            </Card>
+          </section>
+
+          {listError ? (
+            <Alert>
+              <AlertCircleIcon />
+              <AlertTitle>Ошибка операции</AlertTitle>
+              <AlertDescription>{listError}</AlertDescription>
+            </Alert>
+          ) : null}
+
+          <Card className="overflow-hidden">
+            <CardHeader className="border-b">
+              <CardTitle>Таблица курсов</CardTitle>
+              <CardDescription>
+                Выберите курс из строки таблицы, чтобы открыть детали, файлы и
+                этапы генерации в боковой панели.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="min-w-[240px]">Курс</TableHead>
+                    <TableHead>Статус</TableHead>
+                    <TableHead>Текущий этап</TableHead>
+                    <TableHead className="min-w-[180px]">Прогресс</TableHead>
+                    <TableHead>Файлы</TableHead>
+                    <TableHead>План</TableHead>
+                    <TableHead>Материалы</TableHead>
+                    <TableHead>Тест</TableHead>
+                    <TableHead>Обновлено</TableHead>
+                    <TableHead className="w-[1%]" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {listLoading ? (
+                    Array.from({ length: 6 }).map((_, index) => (
+                      <TableRow key={index}>
+                        <TableCell colSpan={10}>
+                          <div className="flex items-center gap-3 py-2">
+                            <Skeleton className="h-10 w-full" />
                           </div>
                         </TableCell>
                       </TableRow>
+                    ))
+                  ) : projects.length ? (
+                    projects.map((project) => (
+                      <TableRow
+                        key={project.id}
+                        data-state={project.id === selectedProject?.id ? "selected" : undefined}
+                        className="cursor-pointer"
+                        onClick={() => {
+                          setSelectedId(project.id)
+                          setDetailOpen(true)
+                        }}
+                      >
+                        <TableCell>
+                          <div className="flex flex-col gap-1">
+                            <span className="font-medium">{project.name}</span>
+                            <span className="line-clamp-2 text-xs text-muted-foreground">
+                              {project.sourceSummary}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={projectStatusBadgeVariant(project.status)}>
+                            {projectStatusLabels[project.status]}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {stageLabels[project.currentStage]}
+                        </TableCell>
+                        <TableCell>
+                          <div className="min-w-[160px]">
+                            <Progress value={project.progress} className="flex-col gap-1.5">
+                              <ProgressLabel className="text-xs text-muted-foreground">
+                                Готовность пакета
+                              </ProgressLabel>
+                              <ProgressValue className="ml-0 text-xs">
+                                {(_, value) => `${value ?? 0}%`}
+                              </ProgressValue>
+                            </Progress>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <ArtifactPresenceBadge
+                            label={project.sourceFiles.length ? "Есть" : "Нет"}
+                            present={project.sourceFiles.length > 0}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <ArtifactPresenceBadge
+                            label={stageReached(project, "course_outline") ? "Есть" : "Нет"}
+                            present={stageReached(project, "course_outline")}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <ArtifactPresenceBadge
+                            label={stageReached(project, "course_content") ? "Есть" : "Нет"}
+                            present={stageReached(project, "course_content")}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <ArtifactPresenceBadge
+                            label={stageReached(project, "course_test") ? "Есть" : "Нет"}
+                            present={stageReached(project, "course_test")}
+                          />
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {formatDateLabel(project.updatedAt)}
+                        </TableCell>
+                        <TableCell>
+                          <Button variant="ghost" size="sm">
+                            Открыть
+                            <ChevronRightIcon data-icon="inline-end" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  ) : (
+                    <TableRow>
+                      <TableCell colSpan={10}>
+                        <div className="py-12 text-center text-sm text-muted-foreground">
+                          Курсов пока нет. Создайте первый курс и загрузите
+                          исходные материалы.
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+              <Separator />
+              <div className="flex flex-col gap-4 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-sm text-muted-foreground">
+                  Показаны {projectTotal === 0 ? 0 : (page - 1) * PAGE_SIZE + 1}-
+                  {Math.min(page * PAGE_SIZE, projectTotal)} из {projectTotal}
+                </div>
+                <Pagination className="mx-0 w-auto justify-end">
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        href="#"
+                        onClick={(event) => {
+                          event.preventDefault()
+                          const nextPage = Math.max(1, page - 1)
+                          setPage(nextPage)
+                          void refreshProjects(nextPage)
+                        }}
+                      />
+                    </PaginationItem>
+                    {Array.from({ length: totalPages }, (_, index) => index + 1).map(
+                      (pageNumber) => (
+                        <PaginationItem key={pageNumber}>
+                          <PaginationLink
+                            href="#"
+                            isActive={pageNumber === page}
+                            onClick={(event) => {
+                              event.preventDefault()
+                              setPage(pageNumber)
+                              void refreshProjects(pageNumber)
+                            }}
+                          >
+                            {pageNumber}
+                          </PaginationLink>
+                        </PaginationItem>
+                      )
                     )}
-                  </TableBody>
-                </Table>
-                <Separator />
-                <div className="flex items-center justify-between px-4 py-4">
-                  <div className="text-sm text-muted-foreground">
-                    Показаны {projectTotal === 0 ? 0 : (page - 1) * PAGE_SIZE + 1}-
-                    {Math.min(page * PAGE_SIZE, projectTotal)} из {projectTotal}
-                  </div>
-                  <Pagination className="mx-0 w-auto justify-end">
-                    <PaginationContent>
-                      <PaginationItem>
-                        <PaginationPrevious
-                          href="#"
-                          onClick={(event) => {
-                            event.preventDefault()
-                            const nextPage = Math.max(1, page - 1)
-                            setPage(nextPage)
-                            void refreshProjects(nextPage)
-                          }}
-                        />
-                      </PaginationItem>
-                      {Array.from({ length: totalPages }, (_, index) => index + 1).map(
-                        (pageNumber) => (
-                          <PaginationItem key={pageNumber}>
-                            <PaginationLink
-                              href="#"
-                              isActive={pageNumber === page}
-                              onClick={(event) => {
-                                event.preventDefault()
-                                setPage(pageNumber)
-                                void refreshProjects(pageNumber)
-                              }}
-                            >
-                              {pageNumber}
-                            </PaginationLink>
-                          </PaginationItem>
-                        )
-                      )}
-                      <PaginationItem>
-                        <PaginationNext
-                          href="#"
-                          onClick={(event) => {
-                            event.preventDefault()
-                            const nextPage = Math.min(totalPages, page + 1)
-                            setPage(nextPage)
-                            void refreshProjects(nextPage)
-                          }}
-                        />
-                      </PaginationItem>
-                    </PaginationContent>
-                  </Pagination>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+                    <PaginationItem>
+                      <PaginationNext
+                        href="#"
+                        onClick={(event) => {
+                          event.preventDefault()
+                          const nextPage = Math.min(totalPages, page + 1)
+                          setPage(nextPage)
+                          void refreshProjects(nextPage)
+                        }}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
 
-          <Card className="min-h-[780px]">
-            <CardHeader className="border-b">
-              {selectedProject ? (
-                <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                  <div className="flex min-w-0 flex-col gap-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <CardTitle className="truncate">{selectedProject.name}</CardTitle>
-                      <Badge variant={projectStatusBadgeVariant(selectedProject.status)}>
-                        {projectStatusLabels[selectedProject.status]}
-                      </Badge>
-                    </div>
-                    <CardDescription>{selectedProject.overview}</CardDescription>
-                    <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                      <span className="inline-flex items-center gap-1">
-                        <FolderGit2Icon className="size-3.5" />
-                        {selectedProject.githubRef}
-                      </span>
-                      <span className="inline-flex items-center gap-1">
-                        <FileTextIcon className="size-3.5" />
-                        {selectedProject.sourceFiles.length} файла
-                      </span>
-                      <span>{selectedProject.updatedAt}</span>
-                    </div>
-                  </div>
-                  <div className="flex min-w-[320px] flex-col gap-3">
-                    <Progress value={selectedProject.progress} className="flex flex-col gap-2">
-                      <ProgressLabel>Готовность полного пакета</ProgressLabel>
-                      <ProgressValue>
-                        {(formattedValue, value) =>
-                          `${formattedValue ?? value ?? 0}%`
-                        }
-                      </ProgressValue>
-                    </Progress>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Button
-                        variant="outline"
-                        onClick={() => setIsEditing((current) => !current)}
-                        disabled={detailLoading || mutating}
-                      >
-                        <PencilLineIcon data-icon="inline-start" />
-                        {isEditing ? "Редактирование включено" : "Редактировать"}
-                      </Button>
-                      <Button
-                        variant="secondary"
-                        onClick={() => void handleSaveDraft()}
-                        disabled={mutating || !currentStageArtifact}
-                      >
-                        <SaveIcon data-icon="inline-start" />
-                        Сохранить
-                      </Button>
-                      <Button
-                        onClick={() => void handleApproveStage()}
-                        disabled={mutating || !currentStageArtifact}
-                      >
-                        <CheckCircle2Icon data-icon="inline-start" />
-                        Подтвердить
-                      </Button>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Button
-                        variant="outline"
-                        onClick={() => {
-                          void refreshProjects(page)
-                          void refreshProject(selectedProject.id)
-                        }}
-                        disabled={detailLoading || mutating}
-                      >
-                        <RefreshCwIcon data-icon="inline-start" />
-                        Обновить проект
-                      </Button>
-                      <Button
-                        variant="outline"
-                        onClick={() => {
-                          const exportTarget = currentStageArtifact
-                          if (!exportTarget) {
-                            return
-                          }
-                          void handleDownloadArtifact(exportTarget.stage, exportTarget.format)
-                        }}
-                        disabled={!currentStageArtifact}
-                      >
-                        <FileDownIcon data-icon="inline-start" />
-                        Скачать артефакт
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              ) : (
+      <Sheet open={createOpen} onOpenChange={setCreateOpen}>
+        <SheetContent className="w-full gap-0 sm:max-w-[680px]">
+          <SheetHeader className="border-b">
+            <SheetTitle>Создать курс</SheetTitle>
+            <SheetDescription>
+              Укажите название курса, добавьте комментарий и при необходимости
+              сразу загрузите исходные файлы.
+            </SheetDescription>
+          </SheetHeader>
+          <ScrollArea className="flex-1">
+            <div className="flex flex-col gap-6 p-4">
+              <Alert>
+                <AlertCircleIcon />
+                <AlertTitle>Пакет материалов</AlertTitle>
+                <AlertDescription>
+                  Можно загрузить до 5 файлов. После создания курс сразу появится
+                  в таблице и будет готов к запуску обработки.
+                </AlertDescription>
+              </Alert>
+
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="course-name">Название курса</Label>
+                <Input
+                  id="course-name"
+                  value={courseName}
+                  onChange={(event) => setCourseName(event.target.value)}
+                  placeholder="Например: Продажа и монтаж изделий"
+                />
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="course-note">Комментарий</Label>
+                <Textarea
+                  id="course-note"
+                  value={courseNote}
+                  onChange={(event) => setCourseNote(event.target.value)}
+                  className="min-h-28"
+                  placeholder="Контекст для команды и генерации: какие материалы внутри, для кого курс и что важно сохранить."
+                />
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="course-files">Файлы курса</Label>
+                <Input
+                  id="course-files"
+                  type="file"
+                  multiple
+                  onChange={(event) =>
+                    setCreateFiles(Array.from(event.target.files ?? []))
+                  }
+                />
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {createFiles.length ? (
+                  createFiles.map((file) => (
+                    <Badge key={`${file.name}-${file.size}`} variant="secondary">
+                      {file.name}
+                    </Badge>
+                  ))
+                ) : (
+                  <Badge variant="outline">Файлы не выбраны</Badge>
+                )}
+              </div>
+
+              {createUploadVisible ? (
                 <div className="flex flex-col gap-2">
-                  <CardTitle>Нет выбранного проекта</CardTitle>
-                  <CardDescription>
-                    Создайте проект или выберите его из списка слева.
-                  </CardDescription>
-                </div>
-              )}
-            </CardHeader>
-
-            <CardContent className="p-0">
-              {detailError ? (
-                <div className="p-4">
-                  <Alert>
-                    <AlertCircleIcon />
-                    <AlertTitle>Не удалось загрузить проект</AlertTitle>
-                    <AlertDescription>{detailError}</AlertDescription>
-                  </Alert>
+                  <Progress value={uploadProgress} className="flex-col gap-2">
+                    <ProgressLabel>Загрузка файлов</ProgressLabel>
+                    <ProgressValue>
+                      {(formattedValue, value) =>
+                        `${formattedValue ?? value ?? 0}%`
+                      }
+                    </ProgressValue>
+                  </Progress>
+                  <div className="text-xs text-muted-foreground">{uploadMessage}</div>
                 </div>
               ) : null}
+            </div>
+          </ScrollArea>
+          <SheetFooter className="border-t">
+            <Button
+              variant="outline"
+              onClick={() => setCreateOpen(false)}
+              disabled={mutating || uploadPhase === "uploading"}
+            >
+              Отмена
+            </Button>
+            <Button
+              onClick={() => void handleCreateCourse()}
+              disabled={!courseName.trim() || mutating || uploadPhase === "uploading"}
+            >
+              {mutating ? <Loader2Icon data-icon="inline-start" className="animate-spin" /> : <PlusIcon data-icon="inline-start" />}
+              {mutating ? "Создаём курс..." : "Создать курс"}
+            </Button>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
 
-              <Tabs defaultValue="stages" className="gap-0">
+      <Sheet open={detailOpen} onOpenChange={setDetailOpen}>
+        <SheetContent className="w-full gap-0 sm:max-w-[980px]">
+          <SheetHeader className="border-b">
+            {selectedProject ? (
+              <>
+                <div className="flex flex-wrap items-center gap-2">
+                  <SheetTitle>{selectedProject.name}</SheetTitle>
+                  <Badge variant={projectStatusBadgeVariant(selectedProject.status)}>
+                    {projectStatusLabels[selectedProject.status]}
+                  </Badge>
+                </div>
+                <SheetDescription>
+                  {selectedProject.overview ||
+                    "Курс готов к загрузке файлов и последовательной генерации артефактов."}
+                </SheetDescription>
+              </>
+            ) : (
+              <>
+                <SheetTitle>Детали курса</SheetTitle>
+                <SheetDescription>
+                  Выберите курс в таблице, чтобы открыть его рабочую область.
+                </SheetDescription>
+              </>
+            )}
+          </SheetHeader>
+
+          {detailError ? (
+            <div className="border-b p-4">
+              <Alert>
+                <AlertCircleIcon />
+                <AlertTitle>Не удалось загрузить курс</AlertTitle>
+                <AlertDescription>{detailError}</AlertDescription>
+              </Alert>
+            </div>
+          ) : null}
+
+          <ScrollArea className="flex-1">
+            {!selectedProject && detailLoading ? (
+              <div className="flex flex-col gap-4 p-4">
+                <Skeleton className="h-24 w-full" />
+                <Skeleton className="h-72 w-full" />
+              </div>
+            ) : selectedProject ? (
+              <Tabs defaultValue="overview" className="gap-0">
                 <TabsList variant="line" className="border-b px-4 pt-4">
+                  <TabsTrigger value="overview">Обзор</TabsTrigger>
                   <TabsTrigger value="stages">Этапы</TabsTrigger>
-                  <TabsTrigger value="artifacts">Артефакты</TabsTrigger>
                   <TabsTrigger value="journal">Журнал</TabsTrigger>
                 </TabsList>
 
-                <TabsContent value="stages" className="p-4">
-                  {selectedProject ? (
-                    <div className="grid gap-4 xl:grid-cols-[1.1fr_minmax(0,1fr)]">
-                      <div className="grid gap-3">
-                        {selectedProject.stages.map((stage) => (
-                          <button
-                            key={stage.id}
-                            type="button"
-                            onClick={() => {
-                              setSelectedStage(stage.id)
-                              setIsEditing(false)
-                            }}
-                            className={cn(
-                              "flex items-start justify-between gap-3 rounded-xl border p-4 text-left transition hover:bg-muted/40",
-                              selectedStage === stage.id &&
-                                "border-foreground/30 bg-muted/40"
-                            )}
-                          >
-                            <div className="flex min-w-0 flex-col gap-1">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className="font-medium">{stageLabels[stage.id]}</span>
-                                <Badge variant={stageStatusBadgeVariant(stage.status)}>
-                                  {stage.status === "done"
-                                    ? "Готов"
-                                    : stage.status === "processing"
-                                      ? "В работе"
-                                      : stage.status === "failed"
-                                        ? "Ошибка"
-                                        : "Ожидает"}
-                                </Badge>
-                              </div>
-                              <p className="text-sm text-muted-foreground">{stage.note}</p>
-                              <span className="text-xs text-muted-foreground">
-                                {stage.updatedAt}
-                              </span>
-                            </div>
-                            <MoreHorizontalIcon className="mt-0.5 size-4 text-muted-foreground" />
-                          </button>
-                        ))}
-                      </div>
+                <TabsContent value="overview" className="p-4">
+                  <div className="flex flex-col gap-6">
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                      <Card size="sm">
+                        <CardHeader>
+                          <CardDescription>Текущий этап</CardDescription>
+                          <CardTitle className="text-base">
+                            {stageLabels[selectedProject.currentStage]}
+                          </CardTitle>
+                        </CardHeader>
+                      </Card>
+                      <Card size="sm">
+                        <CardHeader>
+                          <CardDescription>Файлов в курсе</CardDescription>
+                          <CardTitle>{selectedProject.sourceFiles.length}</CardTitle>
+                        </CardHeader>
+                      </Card>
+                      <Card size="sm">
+                        <CardHeader>
+                          <CardDescription>Подтверждено этапов</CardDescription>
+                          <CardTitle>{selectedProject.reviews.length}</CardTitle>
+                        </CardHeader>
+                      </Card>
+                      <Card size="sm">
+                        <CardHeader>
+                          <CardDescription>Последнее обновление</CardDescription>
+                          <CardTitle className="text-base">
+                            {formatDateLabel(selectedProject.updatedAt)}
+                          </CardTitle>
+                        </CardHeader>
+                      </Card>
+                    </div>
 
-                      <div className="flex flex-col gap-4">
-                        <div className="flex items-center justify-between">
-                          <div className="flex flex-col gap-1">
-                            <div className="text-sm font-medium">
-                              {stageLabels[selectedStage]}
-                            </div>
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Готовность курса</CardTitle>
+                        <CardDescription>
+                          Прогресс полного пакета и основные действия по курсу.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="flex flex-col gap-4">
+                        <Progress value={selectedProject.progress} className="flex-col gap-2">
+                          <ProgressLabel>Готовность полного пакета</ProgressLabel>
+                          <ProgressValue>
+                            {(formattedValue, value) =>
+                              `${formattedValue ?? value ?? 0}%`
+                            }
+                          </ProgressValue>
+                        </Progress>
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            variant="outline"
+                            onClick={() => {
+                              void refreshProjects(page)
+                              void refreshProject(selectedProject.id)
+                            }}
+                            disabled={detailLoading || mutating}
+                          >
+                            <RefreshCwIcon data-icon="inline-start" />
+                            Обновить курс
+                          </Button>
+                          <Button
+                            variant="secondary"
+                            onClick={() => void handleStartProject()}
+                            disabled={!selectedProject.sourceFiles.length || mutating}
+                          >
+                            <PlayIcon data-icon="inline-start" />
+                            Запустить обработку
+                          </Button>
+                          <Button
+                            variant="outline"
+                            onClick={() => {
+                              const exportTarget = currentStageArtifact
+                              if (!exportTarget) {
+                                return
+                              }
+                              void handleDownloadArtifact(
+                                exportTarget.stage,
+                                exportTarget.format
+                              )
+                            }}
+                            disabled={!currentStageArtifact}
+                          >
+                            <FileDownIcon data-icon="inline-start" />
+                            Скачать артефакт
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Загрузка файлов</CardTitle>
+                        <CardDescription>
+                          Добавляйте новые исходники и повторно запускайте
+                          обработку по мере обновления курса.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="flex flex-col gap-4">
+                        <Alert>
+                          <AlertCircleIcon />
+                          <AlertTitle>Политика хранения</AlertTitle>
+                          <AlertDescription>
+                            Итоговые материалы хранятся как артефакты курса, а
+                            исходные файлы привязываются к карточке курса.
+                          </AlertDescription>
+                        </Alert>
+                        <div className="flex flex-col gap-2">
+                          <Label htmlFor="detail-files">Добавить файлы</Label>
+                          <Input
+                            id="detail-files"
+                            type="file"
+                            multiple
+                            onChange={(event) =>
+                              setDetailFiles(Array.from(event.target.files ?? []))
+                            }
+                          />
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {detailFiles.length ? (
+                            detailFiles.map((file) => (
+                              <Badge
+                                key={`${file.name}-${file.size}`}
+                                variant="secondary"
+                              >
+                                {file.name}
+                              </Badge>
+                            ))
+                          ) : (
+                            <Badge variant="outline">Новые файлы не выбраны</Badge>
+                          )}
+                        </div>
+                        {detailUploadVisible ? (
+                          <div className="flex flex-col gap-2">
+                            <Progress value={uploadProgress} className="flex-col gap-2">
+                              <ProgressLabel>Загрузка файлов</ProgressLabel>
+                              <ProgressValue>
+                                {(formattedValue, value) =>
+                                  `${formattedValue ?? value ?? 0}%`
+                                }
+                              </ProgressValue>
+                            </Progress>
                             <div className="text-xs text-muted-foreground">
-                              Последняя версия хранится только как итоговый черновик.
+                              {uploadMessage}
                             </div>
                           </div>
+                        ) : null}
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            variant="outline"
+                            onClick={() => void handleUploadFiles()}
+                            disabled={!detailFiles.length || uploadPhase === "uploading"}
+                          >
+                            <UploadIcon data-icon="inline-start" />
+                            {uploadPhase === "uploading" && uploadContext === "detail"
+                              ? "Загрузка..."
+                              : "Загрузить файлы"}
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Исходные файлы</CardTitle>
+                        <CardDescription>
+                          Список файлов, уже привязанных к выбранному курсу.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="p-0">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Файл</TableHead>
+                              <TableHead>Тип</TableHead>
+                              <TableHead>Статус</TableHead>
+                              <TableHead>Размер</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {selectedProject.sourceFiles.length ? (
+                              selectedProject.sourceFiles.map((file) => (
+                                <TableRow key={file.id}>
+                                  <TableCell className="font-medium">
+                                    {file.originalName}
+                                  </TableCell>
+                                  <TableCell className="capitalize">
+                                    {file.kind}
+                                  </TableCell>
+                                  <TableCell>
+                                    <Badge variant="outline">
+                                      {sourceFileStatusLabel(file.uploadStatus)}
+                                    </Badge>
+                                  </TableCell>
+                                  <TableCell>
+                                    {(file.sizeBytes / 1024 / 1024).toFixed(1)} МБ
+                                  </TableCell>
+                                </TableRow>
+                              ))
+                            ) : (
+                              <TableRow>
+                                <TableCell colSpan={4}>
+                                  <div className="py-8 text-center text-sm text-muted-foreground">
+                                    Для курса пока не загружено ни одного файла.
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+                            )}
+                          </TableBody>
+                        </Table>
+                      </CardContent>
+                    </Card>
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="stages" className="p-4">
+                  <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
+                    <div className="flex flex-col gap-2">
+                      {selectedProject.stages.map((stage) => (
+                        <Button
+                          key={stage.id}
+                          type="button"
+                          variant={selectedStage === stage.id ? "secondary" : "outline"}
+                          className="h-auto justify-between px-3 py-3 text-left"
+                          onClick={() => {
+                            setSelectedStage(stage.id)
+                            setIsEditing(false)
+                          }}
+                        >
+                          <div className="flex min-w-0 flex-col gap-1">
+                            <span className="font-medium">{stageLabels[stage.id]}</span>
+                            <span className="text-xs text-muted-foreground">
+                              {stage.note}
+                            </span>
+                            <span className="text-xs text-muted-foreground">
+                              {stage.updatedAt}
+                            </span>
+                          </div>
+                          <Badge variant={stageStatusBadgeVariant(stage.status)}>
+                            {stageBadgeLabel(stage.status)}
+                          </Badge>
+                        </Button>
+                      ))}
+                    </div>
+
+                    <Card>
+                      <CardHeader>
+                        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                          <div className="flex flex-col gap-1">
+                            <CardTitle>{stageLabels[selectedStage]}</CardTitle>
+                            <CardDescription>
+                              Редактируйте markdown, сохраняйте правки и
+                              подтверждайте этап по мере готовности.
+                            </CardDescription>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              variant="outline"
+                              onClick={() => setIsEditing((current) => !current)}
+                              disabled={detailLoading || mutating}
+                            >
+                              <PencilLineIcon data-icon="inline-start" />
+                              {isEditing ? "Режим редактирования" : "Редактировать"}
+                            </Button>
+                            <Button
+                              variant="secondary"
+                              onClick={() => void handleSaveDraft()}
+                              disabled={mutating || !currentStageArtifact}
+                            >
+                              <SaveIcon data-icon="inline-start" />
+                              Сохранить
+                            </Button>
+                            <Button
+                              onClick={() => void handleApproveStage()}
+                              disabled={mutating || !currentStageArtifact}
+                            >
+                              <CheckCircle2Icon data-icon="inline-start" />
+                              Подтвердить этап
+                            </Button>
+                          </div>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="flex flex-col gap-4">
+                        <div className="flex flex-wrap items-center gap-2">
                           <Badge variant="outline">Markdown</Badge>
+                          <Badge variant="secondary">
+                            {stageLabels[selectedProject.currentStage]}
+                          </Badge>
                         </div>
                         <Textarea
                           value={editorValue}
@@ -974,254 +1263,129 @@ export function EcolmsDashboard() {
                             setIsEditing(true)
                           }}
                           readOnly={!isEditing}
-                          className="min-h-[420px] font-mono text-sm"
+                          className="min-h-[480px] font-mono text-sm"
                         />
-                        <div className="flex flex-wrap items-center gap-2">
+                        <div className="flex flex-wrap gap-2">
                           <Button
                             variant="outline"
-                            onClick={() => setIsEditing(true)}
-                            disabled={isEditing}
+                            onClick={() => void handleDownloadArtifact(selectedStage, "md")}
                           >
-                            <PencilLineIcon data-icon="inline-start" />
-                            Редактировать
+                            <FileTextIcon data-icon="inline-start" />
+                            Скачать Markdown
                           </Button>
                           <Button
-                            variant="secondary"
-                            onClick={() => void handleSaveDraft()}
-                            disabled={mutating || !currentStageArtifact}
+                            variant="outline"
+                            onClick={() => void handleDownloadArtifact(selectedStage, "json")}
                           >
-                            <SaveIcon data-icon="inline-start" />
-                            Сохранить черновик
-                          </Button>
-                          <Button
-                            onClick={() => void handleApproveStage()}
-                            disabled={mutating || !currentStageArtifact}
-                          >
-                            <CheckCircle2Icon data-icon="inline-start" />
-                            Подтвердить этап
+                            <FileDownIcon data-icon="inline-start" />
+                            Скачать JSON
                           </Button>
                         </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="rounded-xl border p-10 text-center text-sm text-muted-foreground">
-                      Выберите проект, чтобы увидеть этапы.
-                    </div>
-                  )}
-                </TabsContent>
-
-                <TabsContent value="artifacts" className="p-4">
-                  {selectedProject ? (
-                    <div className="grid gap-4">
-                      <Alert>
-                        <CheckCircle2Icon />
-                        <AlertTitle>Артефакты хранятся только в S3</AlertTitle>
-                        <AlertDescription>
-                          В PostgreSQL лежат только метаданные и ссылки на файлы.
-                        </AlertDescription>
-                      </Alert>
-                      <Card size="sm">
-                        <CardContent className="p-0">
-                          <Table>
-                            <TableHeader>
-                              <TableRow>
-                                <TableHead>Файл</TableHead>
-                                <TableHead>Этап</TableHead>
-                                <TableHead>Размер</TableHead>
-                                <TableHead className="text-right">Действия</TableHead>
-                              </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                              {selectedProject.artifacts.map((artifact) => (
-                                <TableRow key={artifact.id}>
-                                  <TableCell>
-                                    <div className="flex flex-col gap-1">
-                                      <span className="font-medium">
-                                        {artifact.stage}.{artifact.format}
-                                      </span>
-                                      <span className="text-xs text-muted-foreground">
-                                        {artifact.storageKey}
-                                      </span>
-                                    </div>
-                                  </TableCell>
-                                  <TableCell>{stageLabels[artifact.stage]}</TableCell>
-                                  <TableCell>
-                                    {artifact.format === "md" ? "Markdown" : "JSON"}
-                                  </TableCell>
-                                  <TableCell className="text-right">
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() =>
-                                        void handleDownloadArtifact(
-                                          artifact.stage,
-                                          artifact.format
-                                        )
-                                      }
-                                    >
-                                      <FileDownIcon data-icon="inline-start" />
-                                      Скачать
-                                    </Button>
-                                  </TableCell>
-                                </TableRow>
-                              ))}
-                            </TableBody>
-                          </Table>
-                        </CardContent>
-                      </Card>
-                      <div className="flex flex-wrap gap-2">
-                        <Button
-                          variant="outline"
-                          onClick={() => {
-                            const artifact = getStageArtifact(selectedProject, selectedStage, "md")
-                            if (artifact) {
-                              setEditorValue(artifact.contentMd)
-                              setIsEditing(true)
-                            }
-                          }}
-                        >
-                          <FileTextIcon data-icon="inline-start" />
-                          Открыть Markdown
-                        </Button>
-                        <Button
-                          variant="outline"
-                          onClick={() => {
-                            const artifact = getStageArtifact(selectedProject, selectedStage, "md")
-                            if (artifact) {
-                              setEditorValue(artifact.contentMd)
-                            }
-                          }}
-                        >
-                          <RefreshCwIcon data-icon="inline-start" />
-                          Обновить редактор
-                        </Button>
-                        <Button
-                          onClick={() => void handleApproveStage()}
-                          disabled={mutating || !currentStageArtifact}
-                        >
-                          <SparklesIcon data-icon="inline-start" />
-                          Собрать следующий этап
-                        </Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="rounded-xl border p-10 text-center text-sm text-muted-foreground">
-                      Выберите проект, чтобы увидеть артефакты.
-                    </div>
-                  )}
+                      </CardContent>
+                    </Card>
+                  </div>
                 </TabsContent>
 
                 <TabsContent value="journal" className="p-4">
-                  {selectedProject ? (
-                    <div className="grid gap-4">
-                      <Alert>
-                        <Loader2Icon />
-                        <AlertTitle>Текущий статус</AlertTitle>
-                        <AlertDescription>
-                          Обработка выполняется последовательно, следующий этап
-                          запускается только после подтверждения.
-                        </AlertDescription>
-                      </Alert>
-                      <Card size="sm">
-                        <CardHeader>
-                          <CardTitle className="text-base">Логи проекта</CardTitle>
-                        </CardHeader>
-                        <CardContent className="p-0">
-                          <ScrollArea className="h-[280px] rounded-b-xl border-t">
-                            <div className="flex flex-col gap-3 p-4">
-                              {selectedProject.logs.map((entry, index) => (
-                                <div
-                                  key={`${selectedProject.id}-log-${index}`}
-                                  className="rounded-lg border bg-background px-3 py-2 text-sm"
-                                >
-                                  {entry}
-                                </div>
-                              ))}
-                            </div>
-                          </ScrollArea>
-                        </CardContent>
-                      </Card>
-                      <Card size="sm">
-                        <CardHeader>
-                          <CardTitle className="text-base">Jobs</CardTitle>
-                          <CardDescription>
-                            Очередь обработки и повторные запуски.
-                          </CardDescription>
-                        </CardHeader>
-                        <CardContent className="p-0">
-                          <Table>
-                            <TableHeader>
-                              <TableRow>
-                                <TableHead>Этап</TableHead>
-                                <TableHead>Статус</TableHead>
-                                <TableHead>Создан</TableHead>
-                                <TableHead className="text-right">Действия</TableHead>
-                              </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                              {jobs.length ? (
-                                jobs.map((job) => (
-                                  <TableRow key={job.id}>
-                                    <TableCell>{stageLabels[job.stage]}</TableCell>
-                                    <TableCell>
-                                      <Badge variant={stageStatusBadgeVariant(job.status)}>
-                                        {job.status}
-                                      </Badge>
-                                    </TableCell>
-                                    <TableCell className="text-sm text-muted-foreground">
-                                      {new Date(job.createdAt).toLocaleString("ru-RU")}
-                                    </TableCell>
-                                    <TableCell className="text-right">
-                                      <Button
-                                        variant="outline"
-                                        size="sm"
-                                        disabled={job.status !== "failed" || mutating}
-                                        onClick={() => void handleRetryJob(job.id)}
-                                      >
-                                        <RefreshCwIcon data-icon="inline-start" />
-                                        Retry
-                                      </Button>
-                                    </TableCell>
-                                  </TableRow>
-                                ))
-                              ) : (
-                                <TableRow>
-                                  <TableCell colSpan={4}>
-                                    <div className="py-10 text-center text-sm text-muted-foreground">
-                                      Пока нет jobs.
-                                    </div>
+                  <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Очередь и job</CardTitle>
+                        <CardDescription>
+                          История задач по курсу с возможностью повторного запуска.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="p-0">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Этап</TableHead>
+                              <TableHead>Статус</TableHead>
+                              <TableHead>Создан</TableHead>
+                              <TableHead>Ошибка</TableHead>
+                              <TableHead className="w-[1%]" />
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {jobs.length ? (
+                              jobs.map((job) => (
+                                <TableRow key={job.id}>
+                                  <TableCell>{stageLabels[job.stage]}</TableCell>
+                                  <TableCell>
+                                    <Badge variant={stageStatusBadgeVariant(job.status)}>
+                                      {stageBadgeLabel(job.status)}
+                                    </Badge>
+                                  </TableCell>
+                                  <TableCell>{formatDateLabel(job.createdAt)}</TableCell>
+                                  <TableCell className="max-w-[220px] truncate text-muted-foreground">
+                                    {job.errorText ?? "Без ошибок"}
+                                  </TableCell>
+                                  <TableCell>
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => void handleRetryJob(job.id)}
+                                      disabled={mutating}
+                                    >
+                                      Повторить
+                                    </Button>
                                   </TableCell>
                                 </TableRow>
+                              ))
+                            ) : (
+                              <TableRow>
+                                <TableCell colSpan={5}>
+                                  <div className="py-8 text-center text-sm text-muted-foreground">
+                                    История job появится после первого запуска
+                                    обработки.
+                                  </div>
+                                </TableCell>
+                              </TableRow>
+                            )}
+                          </TableBody>
+                        </Table>
+                      </CardContent>
+                    </Card>
+
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Лог курса</CardTitle>
+                        <CardDescription>
+                          Последние служебные события по выбранному курсу.
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="flex flex-col gap-2">
+                        {selectedProject.logs.length ? (
+                          selectedProject.logs.map((entry, index) => (
+                            <div
+                              key={`${entry}-${index}`}
+                              className={cn(
+                                "rounded-lg border border-border/70 px-3 py-2 text-sm",
+                                index === 0 && "bg-muted/40"
                               )}
-                            </TableBody>
-                          </Table>
-                        </CardContent>
-                      </Card>
-                    </div>
-                  ) : (
-                    <div className="rounded-xl border p-10 text-center text-sm text-muted-foreground">
-                      Выберите проект, чтобы увидеть журнал.
-                    </div>
-                  )}
+                            >
+                              {entry}
+                            </div>
+                          ))
+                        ) : (
+                          <div className="rounded-lg border border-dashed border-border px-3 py-6 text-sm text-muted-foreground">
+                            Лог ещё пуст. Он начнёт заполняться после загрузки
+                            файлов и запуска обработки.
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  </div>
                 </TabsContent>
               </Tabs>
-            </CardContent>
-          </Card>
-        </div>
-
-        <footer className="flex flex-col gap-3 border-t border-border/60 py-4 text-sm text-muted-foreground lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            EcoLMS рассчитан на небольшой внутренний контур: до 5 пользователей и
-            до 100 генераций в месяц.
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline">Beget S3</Badge>
-            <Badge variant="outline">PostgreSQL</Badge>
-            <Badge variant="outline">Redis</Badge>
-            <Badge variant="outline">Dokploy</Badge>
-          </div>
-        </footer>
-      </div>
-    </div>
+            ) : (
+              <div className="p-4 text-sm text-muted-foreground">
+                Выберите курс в таблице, чтобы открыть детали.
+              </div>
+            )}
+          </ScrollArea>
+        </SheetContent>
+      </Sheet>
+    </>
   )
 }

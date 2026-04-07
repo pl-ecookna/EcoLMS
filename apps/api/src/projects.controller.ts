@@ -15,7 +15,8 @@ export class ProjectsController {
   async createProject(
     @Body()
     body: {
-      githubRef: string
+      name?: string
+      githubRef?: string
       note?: string
     }
   ) {
