@@ -6,7 +6,6 @@ import {
   FileTextIcon,
   Loader2Icon,
   PlusIcon,
-  RefreshCwIcon,
   SaveIcon,
   SparklesIcon,
   UploadIcon,
@@ -633,25 +632,7 @@ export function EcolmsDashboard() {
                 Рабочее пространство EcoLMS
               </h1>
             </div>
-            <div className="flex items-center gap-3">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  void refreshProjects(page)
-                  if (selectedProject?.id) {
-                    void refreshProject(selectedProject.id)
-                  }
-                }}
-                disabled={listLoading}
-              >
-                <RefreshCwIcon data-icon="inline-start" />
-                Обновить
-              </Button>
-              <Button onClick={() => setCreateOpen(true)}>
-                <PlusIcon data-icon="inline-start" />
-                Создать курс
-              </Button>
-            </div>
+            <div />
           </header>
 
           <section className="grid grid-cols-4 gap-3">
@@ -692,8 +673,16 @@ export function EcolmsDashboard() {
           <section className="grid flex-1 grid-cols-[420px_minmax(0,1fr)] gap-4">
             <Card className="overflow-hidden border-border/80 bg-card">
               <CardHeader className="border-b bg-secondary/35">
-                <CardTitle>Курсы</CardTitle>
-                <CardDescription>Список курсов и текущий статус.</CardDescription>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <CardTitle>Курсы</CardTitle>
+                    <CardDescription>Список курсов и текущий статус.</CardDescription>
+                  </div>
+                  <Button onClick={() => setCreateOpen(true)}>
+                    <PlusIcon data-icon="inline-start" />
+                    Создать курс
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent className="p-0">
                 <ScrollArea className="h-[calc(100vh-360px)]">
@@ -826,13 +815,27 @@ export function EcolmsDashboard() {
                         <Badge variant={projectStatusBadgeVariant(selectedProject.status)}>
                           {projectStatusLabels[selectedProject.status]}
                         </Badge>
-                        <Button
-                          variant="outline"
-                          onClick={() => setEditOpen(true)}
-                          disabled={detailLoading || mutating}
+                        <div
+                          data-slot="button-group"
+                          className="inline-flex items-center overflow-hidden border border-border"
                         >
-                          Редактировать
-                        </Button>
+                          <Button
+                            variant="ghost"
+                            onClick={() => setEditOpen(true)}
+                            disabled={detailLoading || mutating}
+                            className="rounded-none border-r border-border"
+                          >
+                            Редактировать
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            onClick={() => void handleGenerate("course_outline", true)}
+                            disabled={!canGenerateOutline || mutating}
+                            className="rounded-none"
+                          >
+                            Запустить всё автоматически
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   </CardHeader>
@@ -848,19 +851,6 @@ export function EcolmsDashboard() {
                   ) : null}
 
                   <CardContent className="space-y-4 p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="text-sm text-muted-foreground">
-                        Линейная генерация: План → Материалы → Тест
-                      </div>
-                      <Button
-                        variant="outline"
-                        onClick={() => void handleGenerate("course_outline", true)}
-                        disabled={!canGenerateOutline || mutating}
-                      >
-                        Запустить всё автоматически
-                      </Button>
-                    </div>
-
                     <div className="grid grid-cols-[320px_minmax(0,1fr)] gap-4">
                       <Card>
                         <CardHeader>
