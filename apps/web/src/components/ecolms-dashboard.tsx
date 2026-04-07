@@ -731,7 +731,7 @@ export function EcolmsDashboard() {
                             key={project.id}
                             type="button"
                             className={cn(
-                              "w-full rounded-lg border p-4 text-left transition-colors hover:bg-muted/35",
+                              "w-full rounded-lg border p-3 text-left transition-colors hover:bg-muted/35",
                               project.id === selectedProject?.id
                                 ? "border-primary/35 bg-muted/30"
                                 : "border-border/70 bg-card"
@@ -784,10 +784,7 @@ export function EcolmsDashboard() {
                                 </DropdownMenuContent>
                               </DropdownMenu>
                             </div>
-                            <div className="mt-3 flex items-center justify-between gap-2">
-                              <span className="text-xs text-muted-foreground">
-                                {stageLabels[project.currentStage]}
-                              </span>
+                            <div className="mt-2 flex items-center justify-end gap-2">
                               <Badge variant={projectStatusBadgeVariant(project.status)}>
                                 {projectStatusLabels[project.status]}
                               </Badge>
@@ -882,11 +879,7 @@ export function EcolmsDashboard() {
                           {selectedProject.name}
                         </CardTitle>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <Badge variant={projectStatusBadgeVariant(selectedProject.status)}>
-                          {projectStatusLabels[selectedProject.status]}
-                        </Badge>
-                      </div>
+                      <div />
                     </div>
                   </CardHeader>
 
@@ -903,35 +896,6 @@ export function EcolmsDashboard() {
                   <CardContent className="flex-1 space-y-4 p-4">
                     <Card className="flex h-full min-h-[620px] flex-col">
                       <CardHeader className="space-y-4">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="space-y-1">
-                            <CardTitle>{stageLabels[selectedStage]}</CardTitle>
-                            <CardDescription>
-                              Выберите раздел в горизонтальном списке и работайте с его содержимым.
-                            </CardDescription>
-                          </div>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger
-                              disabled={detailLoading || mutating || !currentStageArtifact}
-                              className={buttonVariants({ variant: "outline" })}
-                            >
-                              <MoreHorizontalIcon data-icon="inline-start" />
-                              Действия
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem
-                                onClick={() => setIsEditing((current) => !current)}
-                              >
-                                {isEditing ? "Просмотр" : "Редактировать"}
-                              </DropdownMenuItem>
-                              <DropdownMenuItem onClick={() => void handleSaveDraft()}>
-                                <SaveIcon data-icon="inline-start" />
-                                Сохранить
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </div>
-
                         <div className="grid grid-cols-3 gap-3">
                           {VISIBLE_STAGES.map((stage) => {
                             const stageStatus =
@@ -956,11 +920,6 @@ export function EcolmsDashboard() {
                                 <div className="flex items-start justify-between gap-2">
                                   <div className="space-y-1">
                                     <div className="text-sm font-medium">{stageLabels[stage]}</div>
-                                    <div className="text-xs text-muted-foreground">
-                                      {stageStatus === "done"
-                                        ? "Сгенерировано"
-                                        : "Ещё не сгенерировано"}
-                                    </div>
                                   </div>
                                   <DropdownMenu>
                                     <DropdownMenuTrigger
@@ -993,6 +952,33 @@ export function EcolmsDashboard() {
                                         <FileTextIcon data-icon="inline-start" />
                                         {generationLabelByStage[stage]}
                                       </DropdownMenuItem>
+                                      <DropdownMenuItem
+                                        onClick={() => {
+                                          setSelectedStage(stage)
+                                          setIsEditing((current) =>
+                                            selectedStage === stage ? !current : true
+                                          )
+                                        }}
+                                      >
+                                        {selectedStage === stage && isEditing
+                                          ? "Просмотр"
+                                          : "Редактировать"}
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem
+                                        disabled={
+                                          mutating ||
+                                          stage !== selectedStage ||
+                                          !currentStageArtifact
+                                        }
+                                        onClick={() => {
+                                          setSelectedStage(stage)
+                                          setIsEditing(false)
+                                          void handleSaveDraft()
+                                        }}
+                                      >
+                                        <SaveIcon data-icon="inline-start" />
+                                        Сохранить
+                                      </DropdownMenuItem>
                                     </DropdownMenuContent>
                                   </DropdownMenu>
                                 </div>
@@ -1020,16 +1006,6 @@ export function EcolmsDashboard() {
                             </pre>
                           </div>
                         )}
-                        <div className="flex gap-2">
-                          <Button
-                            variant="outline"
-                            onClick={() => void handleGenerate(selectedStage)}
-                            disabled={isGenerateDisabled(selectedStage)}
-                          >
-                            <FileTextIcon data-icon="inline-start" />
-                            {generationLabelByStage[selectedStage]}
-                          </Button>
-                        </div>
                       </CardContent>
                     </Card>
                   </CardContent>
