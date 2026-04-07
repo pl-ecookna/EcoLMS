@@ -1,9 +1,10 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState, type DragEvent } from "react"
 import {
   AlertCircleIcon,
   CheckCircle2Icon,
+  ChevronDownIcon,
   FileDownIcon,
   FileTextIcon,
   Loader2Icon,
@@ -14,6 +15,7 @@ import {
   SaveIcon,
   SparklesIcon,
   UploadIcon,
+  XIcon,
 } from "lucide-react"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -26,13 +28,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -63,7 +58,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 
@@ -77,7 +71,6 @@ import {
   initUpload,
   listProjects,
   projectStatusLabels,
-  retryJob,
   signUploadPart,
   stageLabels,
   stageOrder,
@@ -92,10 +85,36 @@ import {
 
 const PAGE_SIZE = 25
 const PART_SIZE_BYTES = 10 * 1024 * 1024
+const MAX_CREATE_FILES = 5
+const CREATE_FILES_ACCEPT =
+  ".pdf,.ppt,.pptx,.doc,.docx,.txt,.md,.rtf,.mp3,.wav,.m4a,.aac,.ogg,.flac,.mp4,.mov,.avi,.mkv,.webm,.mpeg,.mpg"
+
+const SUPPORTED_CREATE_EXTENSIONS = new Set([
+  "pdf",
+  "ppt",
+  "pptx",
+  "doc",
+  "docx",
+  "txt",
+  "md",
+  "rtf",
+  "mp3",
+  "wav",
+  "m4a",
+  "aac",
+  "ogg",
+  "flac",
+  "mp4",
+  "mov",
+  "avi",
+  "mkv",
+  "webm",
+  "mpeg",
+  "mpg",
+])
 
 type UploadPhase = "idle" | "uploading" | "done" | "error"
 type UploadContext = "create" | "detail" | null
-type WorkspaceTab = "overview" | "stages" | "journal"
 
 function projectStatusBadgeVariant(
   status: ProjectStatus
@@ -166,13 +185,6 @@ function getStageMarkdown(project: ProjectDetailRecord | null, stage: StageId) {
   )
 }
 
-function latestJobs(jobs: ProcessingJobRecord[]) {
-  return [...jobs].sort(
-    (left, right) =>
-      new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
-  )
-}
-
 function formatDateLabel(value: string) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) {
@@ -228,6 +240,20 @@ function statusAccent(status: ProjectStatus) {
   }
 }
 
+function getFileExtension(fileName: string) {
+  const parts = fileName.toLowerCase().split(".")
+  return parts.length > 1 ? parts[parts.length - 1] : ""
+}
+
+function isSupportedCreateFile(file: File) {
+  if (file.type.startsWith("video/") || file.type.startsWith("audio/")) {
+    return true
+  }
+
+  const extension = getFileExtension(file.name)
+  return SUPPORTED_CREATE_EXTENSIONS.has(extension)
+}
+
 export function EcolmsDashboard() {
   const [projects, setProjects] = useState<ProjectRecord[]>([])
   const [projectTotal, setProjectTotal] = useState(0)
@@ -236,13 +262,19 @@ export function EcolmsDashboard() {
   const [selectedProject, setSelectedProject] =
     useState<ProjectDetailRecord | null>(null)
   const [selectedStage, setSelectedStage] = useState<StageId>("source_compiled")
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>("overview")
   const [editorValue, setEditorValue] = useState("")
   const [isEditing, setIsEditing] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
+  const [editOpen, setEditOpen] = useState(false)
+  const [showActionPanel, setShowActionPanel] = useState(false)
+  const [showStagePathPanel, setShowStagePathPanel] = useState(false)
   const [courseName, setCourseName] = useState("")
   const [courseNote, setCourseNote] = useState("")
+  const [regenerationContext, setRegenerationContext] = useState("")
   const [createFiles, setCreateFiles] = useState<File[]>([])
+  const [createDropActive, setCreateDropActive] = useState(false)
+  const [createFilesError, setCreateFilesError] = useState<string | null>(null)
+  const createFilesInputRef = useRef<HTMLInputElement | null>(null)
   const [detailFiles, setDetailFiles] = useState<File[]>([])
   const [listLoading, setListLoading] = useState(true)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -253,18 +285,12 @@ export function EcolmsDashboard() {
   const [uploadProgress, setUploadProgress] = useState(0)
   const [listError, setListError] = useState<string | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
-  const [jobErrorOpen, setJobErrorOpen] = useState(false)
-  const [selectedJobError, setSelectedJobError] = useState("")
 
   const totalPages = Math.max(1, Math.ceil(projectTotal / PAGE_SIZE))
   const currentStageArtifact = getStageArtifact(
     selectedProject,
     selectedStage,
     "md"
-  )
-  const jobs = useMemo(
-    () => latestJobs(selectedProject?.jobs ?? []),
-    [selectedProject]
   )
 
   async function refreshProjects(nextPage = page) {
@@ -343,11 +369,83 @@ export function EcolmsDashboard() {
     setEditorValue(getStageMarkdown(selectedProject, selectedStage))
   }, [selectedProject, selectedStage])
 
+  useEffect(() => {
+    if (!selectedProject) {
+      setRegenerationContext("")
+      return
+    }
+
+    setRegenerationContext(selectedProject.sourceSummary || "")
+  }, [selectedProject])
+
   function resetUploadState() {
     setUploadPhase("idle")
     setUploadContext(null)
     setUploadMessage("")
     setUploadProgress(0)
+  }
+
+  function selectCreateFiles(nextFiles: File[]) {
+    const rejected: string[] = []
+    const merged = [...createFiles]
+
+    for (const file of nextFiles) {
+      if (!isSupportedCreateFile(file)) {
+        rejected.push(file.name)
+        continue
+      }
+
+      const alreadyExists = merged.some(
+        (current) =>
+          current.name === file.name &&
+          current.size === file.size &&
+          current.lastModified === file.lastModified
+      )
+
+      if (!alreadyExists) {
+        merged.push(file)
+      }
+    }
+
+    if (rejected.length) {
+      setCreateFilesError(
+        `Неподдерживаемые форматы: ${rejected.join(", ")}. Разрешены PDF, PPT/PPTX, DOC/DOCX, TXT/MD/RTF, аудио и видео.`
+      )
+    } else {
+      setCreateFilesError(null)
+    }
+
+    if (merged.length > MAX_CREATE_FILES) {
+      setCreateFilesError(`Можно добавить не более ${MAX_CREATE_FILES} файлов в курс`)
+    }
+
+    setCreateFiles(merged.slice(0, MAX_CREATE_FILES))
+  }
+
+  function removeCreateFile(target: File) {
+    setCreateFiles((current) =>
+      current.filter(
+        (file) =>
+          !(
+            file.name === target.name &&
+            file.size === target.size &&
+            file.lastModified === target.lastModified
+          )
+      )
+    )
+    setCreateFilesError(null)
+  }
+
+  function handleCreateFilesDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault()
+    setCreateDropActive(false)
+
+    const dropped = Array.from(event.dataTransfer.files ?? [])
+    if (!dropped.length) {
+      return
+    }
+
+    selectCreateFiles(dropped)
   }
 
   async function uploadFilesForProject(
@@ -450,7 +548,6 @@ export function EcolmsDashboard() {
       setSelectedStage(created.currentStage)
       setEditorValue(getStageMarkdown(created, created.currentStage))
       setPage(1)
-      setActiveTab("overview")
 
       if (createFiles.length > 0) {
         await uploadFilesForProject(created.id, createFiles, "create", 1)
@@ -462,6 +559,8 @@ export function EcolmsDashboard() {
       setCourseName("")
       setCourseNote("")
       setCreateFiles([])
+      setCreateFilesError(null)
+      setCreateDropActive(false)
       setDetailFiles([])
       setCreateOpen(false)
       resetUploadState()
@@ -533,21 +632,6 @@ export function EcolmsDashboard() {
     }
   }
 
-  async function handleRetryJob(jobId: string) {
-    if (!selectedProject) {
-      return
-    }
-
-    setMutating(true)
-    try {
-      await retryJob(selectedProject.id, jobId)
-      await refreshProject(selectedProject.id)
-      await refreshProjects(page)
-    } finally {
-      setMutating(false)
-    }
-  }
-
   async function handleDownloadArtifact(stage: StageId, format: "md" | "json") {
     if (!selectedProject) {
       return
@@ -559,6 +643,27 @@ export function EcolmsDashboard() {
     )
     if (asset) {
       window.open(asset.downloadUrl, "_blank", "noopener,noreferrer")
+    }
+  }
+
+  async function handleRegenerationFromSheet() {
+    if (!selectedProject) {
+      return
+    }
+
+    setMutating(true)
+    setListError(null)
+
+    try {
+      await startProject(selectedProject.id)
+      await refreshProjects(page)
+      await refreshProject(selectedProject.id)
+      setEditOpen(false)
+      setListError(
+        "Перегенерация запущена. Контекст сохранён локально в интерфейсе; API-сохранение контекста будет добавлено отдельным endpoint."
+      )
+    } finally {
+      setMutating(false)
     }
   }
 
@@ -600,7 +705,7 @@ export function EcolmsDashboard() {
 
     switch (selectedProject.status) {
       case "draft": {
-        setActiveTab("overview")
+        setEditOpen(true)
         break
       }
       case "uploaded": {
@@ -614,7 +719,6 @@ export function EcolmsDashboard() {
       }
       case "awaiting_review": {
         setSelectedStage(selectedProject.currentStage)
-        setActiveTab("stages")
         break
       }
       case "completed": {
@@ -622,7 +726,7 @@ export function EcolmsDashboard() {
         break
       }
       case "failed": {
-        setActiveTab("journal")
+        setEditOpen(true)
         break
       }
     }
@@ -672,9 +776,9 @@ export function EcolmsDashboard() {
 
   return (
     <>
-      <div className="min-h-screen bg-[linear-gradient(180deg,_rgba(237,243,236,0.88)_0%,_rgba(247,247,241,0.9)_45%,_rgba(248,247,242,1)_100%)]">
+      <div className="min-h-screen bg-background">
         <div className="mx-auto flex min-h-screen w-full max-w-[1760px] flex-col gap-5 px-6 py-6">
-          <header className="flex items-end justify-between gap-4 rounded-4xl border border-border/80 bg-card px-6 py-5 shadow-[0_10px_24px_rgba(20,55,28,0.08)]">
+          <header className="flex items-end justify-between gap-4 border border-border/80 bg-card px-6 py-5">
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-2 text-xs uppercase tracking-[0.22em] text-muted-foreground">
                 <SparklesIcon className="size-4" />
@@ -688,8 +792,8 @@ export function EcolmsDashboard() {
               </p>
             </div>
             <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 rounded-full bg-secondary/70 px-4 py-2">
-                <span className="size-2 rounded-full bg-primary" />
+              <div className="flex items-center gap-2 bg-secondary/70 px-4 py-2">
+                <span className="size-2 bg-primary" />
                 <span className="font-heading text-sm font-bold tracking-[0.06em] text-foreground">
                   ECOOKNA GROUP
                 </span>
@@ -750,7 +854,7 @@ export function EcolmsDashboard() {
           ) : null}
 
           <section className="grid flex-1 grid-cols-[420px_minmax(0,1fr)] gap-4">
-            <Card className="overflow-hidden rounded-4xl border-border/80 bg-card shadow-[0_10px_26px_rgba(20,55,28,0.06)]">
+            <Card className="overflow-hidden border-border/80 bg-card">
               <CardHeader className="border-b bg-secondary/35">
                 <CardTitle>Курсы</CardTitle>
                 <CardDescription>
@@ -784,7 +888,6 @@ export function EcolmsDashboard() {
                           )}
                           onClick={() => {
                             setSelectedId(project.id)
-                            setActiveTab("overview")
                           }}
                         >
                           <div className="flex w-full flex-col gap-2">
@@ -866,14 +969,13 @@ export function EcolmsDashboard() {
               </CardContent>
             </Card>
 
-            <Card className="overflow-hidden rounded-4xl border-border/80 bg-card shadow-[0_10px_26px_rgba(20,55,28,0.06)]">
+            <Card className="overflow-hidden border-border/80 bg-card">
               {!selectedProject && !detailLoading ? (
-                <CardContent className="flex h-full min-h-[600px] items-center justify-center">
+                <CardContent className="flex h-full min-h-[640px] items-center justify-center">
                   <div className="max-w-md space-y-2 text-center">
                     <h2 className="font-heading text-xl font-semibold">Выберите курс</h2>
                     <p className="text-sm text-muted-foreground">
-                      Слева доступен список курсов. После выбора откроются этапы,
-                      загрузки и журнал заданий.
+                      Слева доступен список курсов. После выбора откроются материалы курса.
                     </p>
                   </div>
                 </CardContent>
@@ -895,9 +997,18 @@ export function EcolmsDashboard() {
                             "Курс готов к загрузке исходников и последовательной сборке материалов."}
                         </CardDescription>
                       </div>
-                      <Badge variant={projectStatusBadgeVariant(selectedProject.status)}>
-                        {projectStatusLabels[selectedProject.status]}
-                      </Badge>
+                      <div className="flex items-center gap-2">
+                        <Badge variant={projectStatusBadgeVariant(selectedProject.status)}>
+                          {projectStatusLabels[selectedProject.status]}
+                        </Badge>
+                        <Button
+                          variant="outline"
+                          onClick={() => setEditOpen(true)}
+                          disabled={detailLoading || mutating}
+                        >
+                          Редактировать
+                        </Button>
+                      </div>
                     </div>
                   </CardHeader>
 
@@ -912,242 +1023,115 @@ export function EcolmsDashboard() {
                   ) : null}
 
                   <CardContent className="space-y-4 p-4">
-                    <Card size="sm" className="border-border/80 bg-secondary/28">
-                      <CardHeader>
-                        <CardTitle className="text-base">Путь по этапам</CardTitle>
-                        <CardDescription>
-                          Текущий этап: {stageLabels[selectedProject.currentStage]}
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent className="grid grid-cols-4 gap-2">
-                        {stageOrder.map((stage) => {
-                          const stageState = selectedProject.stages.find(
-                            (item) => item.id === stage
-                          )
-                          return (
-                            <div
-                              key={stage}
-                              className={cn(
-                                "rounded-lg border px-3 py-2",
-                                selectedProject.currentStage === stage && "border-primary/60"
-                              )}
-                            >
-                              <div className="text-xs font-medium">{stageLabels[stage]}</div>
-                              <div className="mt-1 flex items-center gap-2">
-                                <Badge
-                                  variant={stageStatusBadgeVariant(
-                                    stageState?.status ?? "queued"
-                                  )}
-                                >
-                                  {stageBadgeLabel(stageState?.status ?? "queued")}
-                                </Badge>
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </CardContent>
-                    </Card>
-
-                    <Card size="sm" className="border-border/80 bg-secondary/28">
-                      <CardHeader>
-                        <CardTitle className="text-base">Главное действие</CardTitle>
-                        <CardDescription>{primaryActionHint}</CardDescription>
-                      </CardHeader>
-                      <CardContent className="flex items-center justify-between gap-3">
+                    <Card size="sm" className="border-border/80 bg-background">
+                      <CardHeader className="pb-3">
                         <Button
-                          onClick={() => void handlePrimaryAction()}
-                          disabled={!selectedProject || mutating}
+                          type="button"
+                          variant="ghost"
+                          className="h-auto w-full justify-between px-0 text-left"
+                          onClick={() => setShowStagePathPanel((current) => !current)}
                         >
-                          {selectedProject?.status === "uploaded" ? (
-                            <PlayIcon data-icon="inline-start" />
-                          ) : selectedProject?.status === "processing" ? (
-                            <RefreshCwIcon data-icon="inline-start" />
-                          ) : selectedProject?.status === "completed" ? (
-                            <FileDownIcon data-icon="inline-start" />
-                          ) : (
-                            <CheckCircle2Icon data-icon="inline-start" />
-                          )}
-                          {primaryActionLabel}
+                          <div>
+                            <CardTitle className="text-base">Путь по этапам</CardTitle>
+                            <CardDescription>
+                              Текущий этап: {stageLabels[selectedProject.currentStage]}
+                            </CardDescription>
+                          </div>
+                          <ChevronDownIcon
+                            className={cn(
+                              "size-4 transition-transform",
+                              showStagePathPanel && "rotate-180"
+                            )}
+                          />
                         </Button>
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            variant="outline"
-                            onClick={() => {
-                              void refreshProjects(page)
-                              void refreshProject(selectedProject.id)
-                            }}
-                            disabled={detailLoading || mutating}
-                          >
-                            <RefreshCwIcon data-icon="inline-start" />
-                            Обновить курс
-                          </Button>
-                          <Button
-                            variant="outline"
-                            onClick={() =>
-                              void handleDownloadArtifact(selectedProject.currentStage, "md")
-                            }
-                            disabled={!currentStageArtifact}
-                          >
-                            <FileTextIcon data-icon="inline-start" />
-                            Скачать текущий этап
-                          </Button>
-                        </div>
-                      </CardContent>
+                      </CardHeader>
+                      {showStagePathPanel ? (
+                        <CardContent className="grid grid-cols-4 gap-2">
+                          {stageOrder.map((stage) => {
+                            const stageState = selectedProject.stages.find(
+                              (item) => item.id === stage
+                            )
+                            return (
+                              <div
+                                key={stage}
+                                className={cn(
+                                  "border px-3 py-2",
+                                  selectedProject.currentStage === stage && "border-primary/60"
+                                )}
+                              >
+                                <div className="text-xs font-medium">{stageLabels[stage]}</div>
+                                <div className="mt-1 flex items-center gap-2">
+                                  <Badge
+                                    variant={stageStatusBadgeVariant(stageState?.status ?? "queued")}
+                                  >
+                                    {stageBadgeLabel(stageState?.status ?? "queued")}
+                                  </Badge>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </CardContent>
+                      ) : null}
                     </Card>
 
-                    <Tabs
-                      value={activeTab}
-                      onValueChange={(value) => setActiveTab(value as WorkspaceTab)}
-                      className="gap-0"
-                    >
-                      <TabsList variant="line" className="border-b bg-secondary/20 px-1">
-                        <TabsTrigger value="overview">Обзор</TabsTrigger>
-                        <TabsTrigger value="stages">Этапы</TabsTrigger>
-                        <TabsTrigger value="journal">Журнал</TabsTrigger>
-                      </TabsList>
+                    <Card size="sm" className="border-border/80 bg-background">
+                      <CardHeader className="pb-3">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="h-auto w-full justify-between px-0 text-left"
+                          onClick={() => setShowActionPanel((current) => !current)}
+                        >
+                          <div>
+                            <CardTitle className="text-base">Главное действие</CardTitle>
+                            <CardDescription>{primaryActionHint}</CardDescription>
+                          </div>
+                          <ChevronDownIcon
+                            className={cn(
+                              "size-4 transition-transform",
+                              showActionPanel && "rotate-180"
+                            )}
+                          />
+                        </Button>
+                      </CardHeader>
+                      {showActionPanel ? (
+                        <CardContent className="flex items-center justify-between gap-3">
+                          <Button
+                            onClick={() => void handlePrimaryAction()}
+                            disabled={!selectedProject || mutating}
+                          >
+                            {selectedProject?.status === "uploaded" ? (
+                              <PlayIcon data-icon="inline-start" />
+                            ) : selectedProject?.status === "processing" ? (
+                              <RefreshCwIcon data-icon="inline-start" />
+                            ) : selectedProject?.status === "completed" ? (
+                              <FileDownIcon data-icon="inline-start" />
+                            ) : (
+                              <CheckCircle2Icon data-icon="inline-start" />
+                            )}
+                            {primaryActionLabel}
+                          </Button>
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              variant="outline"
+                              onClick={() => {
+                                void refreshProjects(page)
+                                void refreshProject(selectedProject.id)
+                              }}
+                              disabled={detailLoading || mutating}
+                            >
+                              <RefreshCwIcon data-icon="inline-start" />
+                              Обновить курс
+                            </Button>
+                          </div>
+                        </CardContent>
+                      ) : null}
+                    </Card>
 
-                      <TabsContent value="overview" className="pt-4">
-                        <div className="grid grid-cols-3 gap-3">
-                          <Card size="sm">
-                            <CardHeader>
-                              <CardDescription>Файлов в курсе</CardDescription>
-                              <CardTitle>{selectedProject.sourceFiles.length}</CardTitle>
-                            </CardHeader>
-                          </Card>
-                          <Card size="sm">
-                            <CardHeader>
-                              <CardDescription>Подтверждено этапов</CardDescription>
-                              <CardTitle>{selectedProject.reviews.length}</CardTitle>
-                            </CardHeader>
-                          </Card>
-                          <Card size="sm">
-                            <CardHeader>
-                              <CardDescription>Последнее обновление</CardDescription>
-                              <CardTitle className="text-base">
-                                {formatDateLabel(selectedProject.updatedAt)}
-                              </CardTitle>
-                            </CardHeader>
-                          </Card>
-                        </div>
-
-                        <div className="mt-4 grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-[320px_minmax(0,1fr)] gap-4">
                           <Card>
                             <CardHeader>
-                              <CardTitle>Загрузка файлов</CardTitle>
-                              <CardDescription>
-                                Добавьте новые материалы, затем запустите обработку.
-                              </CardDescription>
-                            </CardHeader>
-                            <CardContent className="space-y-3">
-                              <div className="space-y-2">
-                                <Label htmlFor="detail-files">Новые файлы</Label>
-                                <Input
-                                  id="detail-files"
-                                  type="file"
-                                  multiple
-                                  onChange={(event) =>
-                                    setDetailFiles(Array.from(event.target.files ?? []))
-                                  }
-                                />
-                              </div>
-                              <div className="flex flex-wrap gap-2">
-                                {detailFiles.length ? (
-                                  detailFiles.map((file) => (
-                                    <Badge
-                                      key={`${file.name}-${file.size}`}
-                                      variant="secondary"
-                                    >
-                                      {file.name}
-                                    </Badge>
-                                  ))
-                                ) : (
-                                  <Badge variant="outline">Файлы не выбраны</Badge>
-                                )}
-                              </div>
-                              {detailUploadVisible ? (
-                                <div className="space-y-2">
-                                  <Progress value={uploadProgress} className="flex-col gap-2">
-                                    <ProgressLabel>Загрузка файлов</ProgressLabel>
-                                    <ProgressValue>
-                                      {(formattedValue, value) =>
-                                        `${formattedValue ?? value ?? 0}%`
-                                      }
-                                    </ProgressValue>
-                                  </Progress>
-                                  <div className="text-xs text-muted-foreground">
-                                    {uploadMessage}
-                                  </div>
-                                </div>
-                              ) : null}
-                              <Button
-                                variant="outline"
-                                onClick={() => void handleUploadFiles()}
-                                disabled={!detailFiles.length || uploadPhase === "uploading"}
-                              >
-                                <UploadIcon data-icon="inline-start" />
-                                {uploadPhase === "uploading" && uploadContext === "detail"
-                                  ? "Загрузка..."
-                                  : "Загрузить файлы"}
-                              </Button>
-                            </CardContent>
-                          </Card>
-
-                          <Card>
-                            <CardHeader>
-                              <CardTitle>Исходные файлы</CardTitle>
-                              <CardDescription>
-                                Материалы, уже привязанные к текущему курсу.
-                              </CardDescription>
-                            </CardHeader>
-                            <CardContent className="p-0">
-                              <Table>
-                                <TableHeader>
-                                  <TableRow>
-                                    <TableHead>Файл</TableHead>
-                                    <TableHead>Тип</TableHead>
-                                    <TableHead>Статус</TableHead>
-                                    <TableHead className="text-right">Размер</TableHead>
-                                  </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                  {selectedProject.sourceFiles.length ? (
-                                    selectedProject.sourceFiles.map((file) => (
-                                      <TableRow key={file.id}>
-                                        <TableCell className="max-w-[240px] truncate font-medium">
-                                          {file.originalName}
-                                        </TableCell>
-                                        <TableCell className="capitalize">{file.kind}</TableCell>
-                                        <TableCell>
-                                          <Badge variant="outline">
-                                            {sourceFileStatusLabel(file.uploadStatus)}
-                                          </Badge>
-                                        </TableCell>
-                                        <TableCell className="text-right">
-                                          {(file.sizeBytes / 1024 / 1024).toFixed(1)} МБ
-                                        </TableCell>
-                                      </TableRow>
-                                    ))
-                                  ) : (
-                                    <TableRow>
-                                      <TableCell colSpan={4}>
-                                        <div className="py-8 text-center text-sm text-muted-foreground">
-                                          Для курса пока не загружено ни одного файла.
-                                        </div>
-                                      </TableCell>
-                                    </TableRow>
-                                  )}
-                                </TableBody>
-                              </Table>
-                            </CardContent>
-                          </Card>
-                        </div>
-                      </TabsContent>
-
-                      <TabsContent value="stages" className="pt-4">
-                        <div className="grid grid-cols-[320px_minmax(0,1fr)] gap-4">
-                          <Card>
-                            <CardHeader>
-                              <CardTitle>Этапы</CardTitle>
+                              <CardTitle>Материалы курса</CardTitle>
                               <CardDescription>
                                 Выберите этап и проверьте результат перед подтверждением.
                               </CardDescription>
@@ -1231,7 +1215,7 @@ export function EcolmsDashboard() {
                                   className="min-h-[500px] font-mono text-sm"
                                 />
                               ) : (
-                                <div className="min-h-[500px] rounded-lg border border-border bg-muted/20 p-4">
+                                <div className="min-h-[500px] border border-border bg-muted/20 p-4">
                                   <pre className="whitespace-pre-wrap text-sm leading-6 text-foreground">
                                     {editorValue || "Пока нет данных для выбранного этапа."}
                                   </pre>
@@ -1258,111 +1242,6 @@ export function EcolmsDashboard() {
                             </CardContent>
                           </Card>
                         </div>
-                      </TabsContent>
-
-                      <TabsContent value="journal" className="pt-4">
-                        <div className="grid grid-cols-[minmax(0,1fr)_340px] gap-4">
-                          <Card>
-                            <CardHeader>
-                              <CardTitle>Очередь задач</CardTitle>
-                              <CardDescription>
-                                История job по этапам и быстрый перезапуск при ошибке.
-                              </CardDescription>
-                            </CardHeader>
-                            <CardContent className="p-0">
-                              <Table>
-                                <TableHeader>
-                                  <TableRow>
-                                    <TableHead>Этап</TableHead>
-                                    <TableHead>Статус</TableHead>
-                                    <TableHead>Создан</TableHead>
-                                    <TableHead>Ошибка</TableHead>
-                                    <TableHead className="w-[1%]" />
-                                  </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                  {jobs.length ? (
-                                    jobs.map((job) => (
-                                      <TableRow key={job.id}>
-                                        <TableCell>{stageLabels[job.stage]}</TableCell>
-                                        <TableCell>
-                                          <Badge variant={stageStatusBadgeVariant(job.status)}>
-                                            {stageBadgeLabel(job.status)}
-                                          </Badge>
-                                        </TableCell>
-                                        <TableCell>{formatDateLabel(job.createdAt)}</TableCell>
-                                        <TableCell>
-                                          {job.errorText ? (
-                                            <Button
-                                              variant="link"
-                                              className="h-auto px-0"
-                                              onClick={() => {
-                                                setSelectedJobError(job.errorText || "")
-                                                setJobErrorOpen(true)
-                                              }}
-                                            >
-                                              Показать ошибку
-                                            </Button>
-                                          ) : (
-                                            <span className="text-muted-foreground">Без ошибок</span>
-                                          )}
-                                        </TableCell>
-                                        <TableCell>
-                                          <Button
-                                            variant="outline"
-                                            size="sm"
-                                            onClick={() => void handleRetryJob(job.id)}
-                                            disabled={mutating}
-                                          >
-                                            Повторить
-                                          </Button>
-                                        </TableCell>
-                                      </TableRow>
-                                    ))
-                                  ) : (
-                                    <TableRow>
-                                      <TableCell colSpan={5}>
-                                        <div className="py-8 text-center text-sm text-muted-foreground">
-                                          История job появится после первого запуска обработки.
-                                        </div>
-                                      </TableCell>
-                                    </TableRow>
-                                  )}
-                                </TableBody>
-                              </Table>
-                            </CardContent>
-                          </Card>
-
-                          <Card>
-                            <CardHeader>
-                              <CardTitle>Лог курса</CardTitle>
-                              <CardDescription>
-                                Последние системные события по выбранному курсу.
-                              </CardDescription>
-                            </CardHeader>
-                            <CardContent className="space-y-2">
-                              {selectedProject.logs.length ? (
-                                selectedProject.logs.map((entry, index) => (
-                                  <div
-                                    key={`${entry}-${index}`}
-                                    className={cn(
-                                      "rounded-lg border border-border/70 px-3 py-2 text-sm",
-                                      index === 0 && "bg-muted/40"
-                                    )}
-                                  >
-                                    {entry}
-                                  </div>
-                                ))
-                              ) : (
-                                <div className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-sm text-muted-foreground">
-                                  Логов пока нет.
-                                </div>
-                              )}
-                            </CardContent>
-                          </Card>
-                        </div>
-                      </TabsContent>
-                    </Tabs>
                   </CardContent>
                 </>
               ) : null}
@@ -1413,25 +1292,96 @@ export function EcolmsDashboard() {
 
               <div className="flex flex-col gap-2">
                 <Label htmlFor="course-files">Файлы курса</Label>
+                <div
+                  className={cn(
+                    "border border-dashed p-4 transition-colors",
+                    createDropActive
+                      ? "border-primary bg-secondary/70"
+                      : "border-border bg-background"
+                  )}
+                  onDragEnter={(event) => {
+                    event.preventDefault()
+                    setCreateDropActive(true)
+                  }}
+                  onDragOver={(event) => {
+                    event.preventDefault()
+                    setCreateDropActive(true)
+                  }}
+                  onDragLeave={(event) => {
+                    event.preventDefault()
+                    setCreateDropActive(false)
+                  }}
+                  onDrop={handleCreateFilesDrop}
+                >
+                  <div className="flex flex-col items-center gap-2 py-4 text-center">
+                    <div className="bg-secondary p-3">
+                      <UploadIcon className="size-5 text-primary" />
+                    </div>
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium">
+                        Перетащите файлы сюда или выберите вручную
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        До {MAX_CREATE_FILES} файлов: PDF, PPT/PPTX, DOC/DOCX, TXT/MD/RTF, аудио и видео
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => createFilesInputRef.current?.click()}
+                    >
+                      Выбрать файлы
+                    </Button>
+                  </div>
+                </div>
                 <Input
+                  ref={createFilesInputRef}
                   id="course-files"
                   type="file"
                   multiple
-                  onChange={(event) => setCreateFiles(Array.from(event.target.files ?? []))}
+                  accept={CREATE_FILES_ACCEPT}
+                  className="sr-only"
+                  onChange={(event) => {
+                    selectCreateFiles(Array.from(event.target.files ?? []))
+                    event.currentTarget.value = ""
+                  }}
                 />
               </div>
 
               <div className="flex flex-wrap gap-2">
                 {createFiles.length ? (
                   createFiles.map((file) => (
-                    <Badge key={`${file.name}-${file.size}`} variant="secondary">
-                      {file.name}
+                    <Badge
+                      key={`${file.name}-${file.size}-${file.lastModified}`}
+                      variant="secondary"
+                      className="gap-1.5 pr-1"
+                    >
+                      <span className="max-w-[320px] truncate">{file.name}</span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-xs"
+                        className="h-4 w-4 hover:bg-background/60"
+                        onClick={() => removeCreateFile(file)}
+                        aria-label={`Удалить файл ${file.name}`}
+                      >
+                        <XIcon className="size-3" />
+                      </Button>
                     </Badge>
                   ))
                 ) : (
                   <Badge variant="outline">Файлы не выбраны</Badge>
                 )}
               </div>
+
+              {createFilesError ? (
+                <Alert variant="destructive">
+                  <AlertCircleIcon />
+                  <AlertTitle>Проверьте файлы</AlertTitle>
+                  <AlertDescription>{createFilesError}</AlertDescription>
+                </Alert>
+              ) : null}
 
               {createUploadVisible ? (
                 <div className="flex flex-col gap-2">
@@ -1469,19 +1419,152 @@ export function EcolmsDashboard() {
         </SheetContent>
       </Sheet>
 
-      <Dialog open={jobErrorOpen} onOpenChange={setJobErrorOpen}>
-        <DialogContent className="max-w-[860px]">
-          <DialogHeader>
-            <DialogTitle>Текст ошибки job</DialogTitle>
-            <DialogDescription>
-              Полный лог ошибки для диагностики и повторного запуска.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="max-h-[420px] overflow-auto rounded-lg border border-border bg-muted/20 p-3">
-            <pre className="whitespace-pre-wrap text-sm">{selectedJobError}</pre>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <Sheet open={editOpen} onOpenChange={setEditOpen}>
+        <SheetContent className="w-full gap-0 sm:max-w-[760px]">
+          <SheetHeader className="border-b">
+            <SheetTitle>Редактировать курс</SheetTitle>
+            <SheetDescription>
+              Добавляйте новые исходники и задавайте контекст для следующей перегенерации.
+            </SheetDescription>
+          </SheetHeader>
+          <ScrollArea className="flex-1">
+            <div className="flex flex-col gap-5 p-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Контекст перегенерации</CardTitle>
+                  <CardDescription>
+                    Контекст виден только в интерфейсе. Для сохранения в базе нужен отдельный API endpoint.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <Textarea
+                    value={regenerationContext}
+                    onChange={(event) => setRegenerationContext(event.target.value)}
+                    className="min-h-28"
+                    placeholder="Например: акцент на практике менеджеров и обязательной терминологии."
+                  />
+                  <Button
+                    onClick={() => void handleRegenerationFromSheet()}
+                    disabled={!selectedProject || !selectedProject.sourceFiles.length || mutating}
+                  >
+                    <PlayIcon data-icon="inline-start" />
+                    Перегенерировать
+                  </Button>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Добавить файлы</CardTitle>
+                  <CardDescription>
+                    Новые файлы добавляются к курсу и участвуют в следующем запуске.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <Input
+                    id="detail-files"
+                    type="file"
+                    multiple
+                    onChange={(event) => setDetailFiles(Array.from(event.target.files ?? []))}
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    {detailFiles.length ? (
+                      detailFiles.map((file) => (
+                        <Badge key={`${file.name}-${file.size}`} variant="secondary">
+                          {file.name}
+                        </Badge>
+                      ))
+                    ) : (
+                      <Badge variant="outline">Файлы не выбраны</Badge>
+                    )}
+                  </div>
+                  {detailUploadVisible ? (
+                    <div className="space-y-2">
+                      <Progress value={uploadProgress} className="flex-col gap-2">
+                        <ProgressLabel>Загрузка файлов</ProgressLabel>
+                        <ProgressValue>
+                          {(formattedValue, value) => `${formattedValue ?? value ?? 0}%`}
+                        </ProgressValue>
+                      </Progress>
+                      <div className="text-xs text-muted-foreground">{uploadMessage}</div>
+                    </div>
+                  ) : null}
+                  <Button
+                    variant="outline"
+                    onClick={() => void handleUploadFiles()}
+                    disabled={!detailFiles.length || uploadPhase === "uploading"}
+                  >
+                    <UploadIcon data-icon="inline-start" />
+                    {uploadPhase === "uploading" && uploadContext === "detail"
+                      ? "Загрузка..."
+                      : "Загрузить файлы"}
+                  </Button>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Исходные файлы курса</CardTitle>
+                  <CardDescription>
+                    Удаление файла появится после добавления API endpoint удаления на backend.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="p-0">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Файл</TableHead>
+                        <TableHead>Тип</TableHead>
+                        <TableHead>Статус</TableHead>
+                        <TableHead className="text-right">Размер</TableHead>
+                        <TableHead className="w-[1%]" />
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {selectedProject?.sourceFiles.length ? (
+                        selectedProject.sourceFiles.map((file) => (
+                          <TableRow key={file.id}>
+                            <TableCell className="max-w-[280px] truncate font-medium">
+                              {file.originalName}
+                            </TableCell>
+                            <TableCell className="capitalize">{file.kind}</TableCell>
+                            <TableCell>
+                              <Badge variant="outline">
+                                {sourceFileStatusLabel(file.uploadStatus)}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {(file.sizeBytes / 1024 / 1024).toFixed(1)} МБ
+                            </TableCell>
+                            <TableCell>
+                              <Button size="sm" variant="outline" disabled>
+                                Удалить
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      ) : (
+                        <TableRow>
+                          <TableCell colSpan={5}>
+                            <div className="py-8 text-center text-sm text-muted-foreground">
+                              Для курса пока не загружено ни одного файла.
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
+            </div>
+          </ScrollArea>
+          <SheetFooter className="border-t">
+            <Button variant="outline" onClick={() => setEditOpen(false)}>
+              Закрыть
+            </Button>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
     </>
   )
 }
