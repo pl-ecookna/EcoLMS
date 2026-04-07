@@ -34,6 +34,13 @@ const UPSTREAM_BASE_URLS =
           "http://localhost:3101",
       ]
 
+const DEFAULT_UPSTREAM_TIMEOUT_MS = 8000
+const configuredTimeout = Number(process.env.ECOLMS_UPSTREAM_TIMEOUT_MS ?? "")
+const UPSTREAM_TIMEOUT_MS =
+  Number.isFinite(configuredTimeout) && configuredTimeout > 0
+    ? configuredTimeout
+    : DEFAULT_UPSTREAM_TIMEOUT_MS
+
 async function proxy(
   request: NextRequest,
   context: { params: Promise<{ path?: string[] }> }
@@ -65,6 +72,10 @@ async function proxy(
       requestInit.duplex = "half"
     }
 
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS)
+    requestInit.signal = controller.signal
+
     try {
       const response = await fetch(upstreamUrl, requestInit)
       lastResponse = response
@@ -83,6 +94,8 @@ async function proxy(
       }
     } catch (error) {
       lastNetworkError = error
+    } finally {
+      clearTimeout(timeout)
     }
   }
 
@@ -105,7 +118,9 @@ async function proxy(
       data: null,
       error:
         lastNetworkError instanceof Error
-          ? lastNetworkError.message
+          ? lastNetworkError.name === "AbortError"
+            ? `Upstream API timeout after ${UPSTREAM_TIMEOUT_MS}ms`
+            : lastNetworkError.message
           : "Upstream API is unavailable",
     }),
     {

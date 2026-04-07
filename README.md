@@ -74,6 +74,22 @@ EcoLMS — внутренний веб-инструмент для подгот�
 6. Worker пока запускается как заглушка: `pnpm dev:worker`.
 7. Для контейнерного запуска можно использовать `pnpm docker:up`.
 
+### Режим UI-отладки (без worker и без Whisper)
+
+Если нужно отлаживать только интерфейс и API, используйте облегчённый режим:
+
+1. Поднять только локальные `Postgres + Redis`:
+   - `pnpm dev:infra:up`
+2. Запустить API в отдельном терминале:
+   - `POSTGRES_URL=postgresql://postgres:postgres@localhost:5434/ecolms REDIS_URL=redis://localhost:6381 API_PORT=3101 pnpm dev:api`
+3. Запустить Web в отдельном терминале:
+   - `ECOLMS_API_BASE_URL=http://localhost:3101 pnpm dev:web`
+4. Открыть интерфейс:
+   - `http://localhost:3000`
+
+Остановка инфраструктуры:
+- `pnpm dev:infra:down`
+
 ### Важная деталь для `web`
 
 Фронтенд ходит в backend через локальный proxy-route `apps/web/src/app/api/[...path]/route.ts`.

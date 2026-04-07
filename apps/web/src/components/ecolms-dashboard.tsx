@@ -532,13 +532,14 @@ export function EcolmsDashboard() {
     }
   }
 
-  async function handleDeleteProject() {
-    if (!selectedProject) {
+  async function handleDeleteProject(projectOverride?: Pick<ProjectRecord, "id" | "name">) {
+    const targetProject = projectOverride ?? selectedProject
+    if (!targetProject) {
       return
     }
 
     const confirmed = window.confirm(
-      `Удалить курс "${selectedProject.name}" целиком? Это действие нельзя отменить.`
+      `Удалить курс "${targetProject.name}" целиком? Это действие нельзя отменить.`
     )
     if (!confirmed) {
       return
@@ -546,9 +547,38 @@ export function EcolmsDashboard() {
 
     setMutating(true)
     try {
-      await deleteProject(selectedProject.id)
+      await deleteProject(targetProject.id)
       setIsEditing(false)
       await refreshProjects(page)
+    } finally {
+      setMutating(false)
+    }
+  }
+
+  async function handleGenerateAllForProject(projectId: string) {
+    setMutating(true)
+    setListError(null)
+    try {
+      const projectDetail = await getProject(projectId)
+
+      if (!projectDetail.sourceFiles.length) {
+        setListError("Нельзя запустить авто-генерацию: сначала загрузите файлы курса.")
+        return
+      }
+
+      await generateStage(projectId, {
+        stage: "course_outline",
+        autoGenerateAll: true,
+        overwriteExisting: false,
+      })
+
+      await refreshProjects(page)
+      await refreshProject(projectId)
+      setSelectedId(projectId)
+      setIsEditing(false)
+      setSelectedStage("course_outline")
+    } catch (error) {
+      setListError(error instanceof Error ? error.message : "Не удалось запустить генерацию")
     } finally {
       setMutating(false)
     }
@@ -686,33 +716,72 @@ export function EcolmsDashboard() {
                       ))
                     ) : projects.length ? (
                       projects.map((project) => (
-                        <Button
+                        <div
                           key={project.id}
-                          variant="ghost"
                           className={cn(
-                            "h-auto w-full justify-start rounded-none border-b border-border/60 px-4 py-3 text-left",
+                            "flex items-stretch border-b border-border/60",
                             project.id === selectedProject?.id && "bg-muted"
                           )}
-                          onClick={() => setSelectedId(project.id)}
                         >
-                          <div className="flex w-full flex-col gap-2">
-                            <div className="flex items-start justify-between gap-2">
-                              <div className="flex min-w-0 flex-col gap-1">
-                                <span className="truncate font-medium">{project.name}</span>
-                                <span className="line-clamp-2 text-xs text-muted-foreground">
-                                  {project.sourceSummary || "Описание появится после обработки."}
-                                </span>
+                          <Button
+                            variant="ghost"
+                            className="h-auto flex-1 justify-start rounded-none px-4 py-3 text-left"
+                            onClick={() => setSelectedId(project.id)}
+                          >
+                            <div className="flex w-full flex-col gap-2">
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="flex min-w-0 flex-col gap-1">
+                                  <span className="truncate font-medium">{project.name}</span>
+                                  <span className="line-clamp-2 text-xs text-muted-foreground">
+                                    {project.sourceSummary || "Описание появится после обработки."}
+                                  </span>
+                                </div>
+                                <Badge variant={projectStatusBadgeVariant(project.status)}>
+                                  {projectStatusLabels[project.status]}
+                                </Badge>
                               </div>
-                              <Badge variant={projectStatusBadgeVariant(project.status)}>
-                                {projectStatusLabels[project.status]}
-                              </Badge>
+                              <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                                <span>{stageLabels[project.currentStage]}</span>
+                                <span>{formatDateLabel(project.updatedAt)}</span>
+                              </div>
                             </div>
-                            <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                              <span>{stageLabels[project.currentStage]}</span>
-                              <span>{formatDateLabel(project.updatedAt)}</span>
-                            </div>
-                          </div>
-                        </Button>
+                          </Button>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger
+                              disabled={mutating}
+                              className={cn(
+                                buttonVariants({ variant: "ghost", size: "icon" }),
+                                "h-auto rounded-none border-l border-border/60 px-3"
+                              )}
+                              onClick={() => setSelectedId(project.id)}
+                            >
+                              <span className="sr-only">Действия курса</span>
+                              <MoreHorizontalIcon className="size-4" />
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem
+                                onClick={() => {
+                                  setSelectedId(project.id)
+                                  setEditOpen(true)
+                                }}
+                              >
+                                Редактировать
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onClick={() => void handleGenerateAllForProject(project.id)}
+                              >
+                                Запустить всё автоматически
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onClick={() => void handleDeleteProject(project)}
+                                className="text-destructive focus:text-destructive"
+                              >
+                                <Trash2Icon data-icon="inline-start" />
+                                Удалить курс
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
                       ))
                     ) : (
                       <div className="px-6 py-12 text-center text-sm text-muted-foreground">
@@ -802,27 +871,6 @@ export function EcolmsDashboard() {
                         <Badge variant={projectStatusBadgeVariant(selectedProject.status)}>
                           {projectStatusLabels[selectedProject.status]}
                         </Badge>
-                        <div
-                          data-slot="button-group"
-                          className="inline-flex items-center overflow-hidden border border-border"
-                        >
-                          <Button
-                            variant="ghost"
-                            onClick={() => setEditOpen(true)}
-                            disabled={detailLoading || mutating}
-                            className="rounded-none border-r border-border"
-                          >
-                            Редактировать
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            onClick={() => void handleGenerate("course_outline", true)}
-                            disabled={!canGenerateOutline || mutating}
-                            className="rounded-none"
-                          >
-                            Запустить всё автоматически
-                          </Button>
-                        </div>
                       </div>
                     </div>
                   </CardHeader>
@@ -928,13 +976,6 @@ export function EcolmsDashboard() {
                                 <DropdownMenuItem onClick={() => void handleSaveDraft()}>
                                   <SaveIcon data-icon="inline-start" />
                                   Сохранить
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={() => void handleDeleteProject()}
-                                  className="text-destructive focus:text-destructive"
-                                >
-                                  <Trash2Icon data-icon="inline-start" />
-                                  Удалить курс
                                 </DropdownMenuItem>
                               </DropdownMenuContent>
                             </DropdownMenu>
