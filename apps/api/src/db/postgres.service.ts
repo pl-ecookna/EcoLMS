@@ -185,7 +185,6 @@ function isProjectStatus(value: string): value is ProjectStatus {
     value === "draft" ||
     value === "uploaded" ||
     value === "processing" ||
-    value === "awaiting_review" ||
     value === "completed" ||
     value === "failed"
   )
@@ -327,7 +326,7 @@ export class PostgresService implements OnModuleInit, OnModuleDestroy {
         topic: "продаж светопрозрачных конструкций",
         overview:
           "Материал для менеджеров, которые ведут первые консультации и собирают потребности клиента.",
-        status: "awaiting_review",
+        status: "uploaded",
         currentStage: "course_outline",
         progress: 68,
         files: 3,

@@ -29,7 +29,6 @@ export type ProjectStatus =
   | "draft"
   | "uploaded"
   | "processing"
-  | "awaiting_review"
   | "completed"
   | "failed"
 export type JobStatus = "queued" | "processing" | "done" | "failed"
@@ -185,21 +184,34 @@ function progressFor(stage: StageId, status: ProjectStatus) {
   }
 }
 
+function nextStageFor(stage: StageId): StageId | null {
+  const next = stageOrder[stageOrder.indexOf(stage) + 1]
+  return next ?? null
+}
+
+function stageGenerationDone(stage: StageId, jobs: ProcessingJobRecord[]) {
+  return jobs.some((job) => job.stage === stage && job.status === "done")
+}
+
 function buildStages(
   currentStage: StageId,
   status: ProjectStatus,
-  updatedAt: string
+  updatedAt: string,
+  jobs: ProcessingJobRecord[]
 ): ProjectStageRecord[] {
-  const currentIndex = stageOrder.indexOf(currentStage)
-
   return stageOrder.map((stageId, index) => {
-    const isCompleted = status === "completed" || index < currentIndex
-    const isActive = index === currentIndex && status !== "completed"
-    const stageStatus: JobStatus = isCompleted
-      ? "done"
-      : isActive
-        ? "processing"
-        : "queued"
+    const stageJobs = jobs.filter((job) => job.stage === stageId)
+    const latest = stageJobs.sort(
+      (left, right) =>
+        new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+    )[0]
+    const stageStatus: JobStatus =
+      latest?.status ??
+      (status === "completed" || index < stageOrder.indexOf(currentStage)
+        ? "done"
+        : status === "processing" && stageId === currentStage
+          ? "processing"
+          : "queued")
 
     return {
       id: stageId,
@@ -212,7 +224,7 @@ function buildStages(
             : stageId === "course_content"
               ? "Разворачиваем материалы в обучающий текст."
               : "Формируем базовый тест из 10 вопросов.",
-      updatedAt: isCompleted || isActive ? updatedAt : "ожидает старта",
+      updatedAt: latest?.createdAt ?? updatedAt,
     }
   })
 }
@@ -293,9 +305,14 @@ function mapReviewRow(row: Record<string, unknown>): StageReviewRecord {
   }
 }
 
-function mapProjectRow(row: Record<string, unknown>, sourceFiles: SourceFileRecord[]): ProjectRecord {
+function mapProjectRow(
+  row: Record<string, unknown>,
+  sourceFiles: SourceFileRecord[],
+  jobs: ProcessingJobRecord[]
+): ProjectRecord {
   const currentStage = String(row.current_stage)
-  const status = String(row.status)
+  const statusRaw = String(row.status)
+  const status = statusRaw === "awaiting_review" ? "uploaded" : statusRaw
   const stageDrafts = parseJson<Record<StageId, string>>(row.stage_drafts, {
     source_compiled: "",
     course_outline: "",
@@ -318,7 +335,8 @@ function mapProjectRow(row: Record<string, unknown>, sourceFiles: SourceFileReco
     stages: buildStages(
       isStageId(currentStage) ? currentStage : "source_compiled",
       status as ProjectStatus,
-      String(row.updated_at)
+      String(row.updated_at),
+      jobs
     ),
     logs: parseJson<string[]>(row.logs, []),
     sourceFiles,
@@ -368,8 +386,12 @@ export class EcolmsStore {
     const total = await this.db.countProjects()
     const items: ProjectRecord[] = []
     for (const row of projectsResult.rows) {
-      const sourceFiles = await this.listSourceFiles(String(row.id))
-      items.push(mapProjectRow(row, sourceFiles))
+      const projectId = String(row.id)
+      const [sourceFiles, jobs] = await Promise.all([
+        this.listSourceFiles(projectId),
+        this.listJobs(projectId),
+      ])
+      items.push(mapProjectRow(row, sourceFiles, jobs))
     }
 
     return {
@@ -498,6 +520,190 @@ export class EcolmsStore {
     })
 
     return { project: await this.getProject(id), job }
+  }
+
+  async updateProject(
+    id: string,
+    input: {
+      note?: string
+      name?: string
+    }
+  ) {
+    const project = await this.loadProjectSummary(id)
+    const nextName = input.name?.trim() || project.name
+    const nextNote = input.note?.trim() ?? project.sourceSummary
+
+    await this.db.query(
+      `
+      update projects
+      set
+        name = $2,
+        source_summary = $3,
+        updated_at = now(),
+        logs = $4::jsonb
+      where id = $1
+      `,
+      [
+        id,
+        nextName,
+        nextNote,
+        JSON.stringify(["Обновлены параметры курса.", ...(project.logs ?? [])].slice(0, 10)),
+      ]
+    )
+
+    return this.getProject(id)
+  }
+
+  async deleteSourceFile(projectId: string, sourceFileId: string) {
+    const project = await this.loadProjectSummary(projectId)
+    const fileExists = project.sourceFiles.some((file) => file.id === sourceFileId)
+    if (!fileExists) {
+      throw new NotFoundException("Файл не найден")
+    }
+
+    await this.db.transaction(async (client) => {
+      await client.query(
+        `delete from source_files where id = $1 and project_id = $2`,
+        [sourceFileId, projectId]
+      )
+
+      const countResult = await client.query<{ count: string }>(
+        `select count(*)::text as count from source_files where project_id = $1`,
+        [projectId]
+      )
+      const filesCount = Number(countResult.rows[0]?.count ?? 0)
+
+      await client.query(
+        `
+        update projects
+        set
+          files = $2,
+          status = case when $2 = 0 then 'draft' else 'uploaded' end,
+          updated_at = now(),
+          logs = $3::jsonb
+        where id = $1
+        `,
+        [
+          projectId,
+          filesCount,
+          JSON.stringify(["Удалён исходный файл курса.", ...(project.logs ?? [])].slice(0, 10)),
+        ]
+      )
+    })
+
+    return this.getProject(projectId)
+  }
+
+  async generateStage(
+    projectId: string,
+    input: {
+      stage: "course_outline" | "course_content" | "course_test"
+      autoGenerateAll?: boolean
+      overwriteExisting?: boolean
+    }
+  ) {
+    const targetStage = input.stage
+    const autoGenerateAll = Boolean(input.autoGenerateAll)
+    const overwriteExisting = Boolean(input.overwriteExisting)
+    const project = await this.loadProjectDetail(projectId)
+
+    if (project.sourceFiles.length === 0) {
+      throw new BadRequestException("Сначала загрузите исходные файлы")
+    }
+
+    const jobs = await this.listJobs(projectId)
+    const isDone = (stage: StageId) => stageGenerationDone(stage, jobs)
+
+    if (targetStage === "course_content" && !isDone("course_outline")) {
+      throw new BadRequestException("Сначала создайте план курса")
+    }
+    if (targetStage === "course_test" && !isDone("course_content")) {
+      throw new BadRequestException("Сначала создайте обучающие материалы")
+    }
+
+    if (isDone(targetStage) && !overwriteExisting) {
+      throw new BadRequestException(
+        "Этап уже сгенерирован. Передайте overwriteExisting=true для перезаписи."
+      )
+    }
+
+    const shouldRunSourceBeforeOutline =
+      targetStage === "course_outline" && !isDone("source_compiled")
+
+    const queuedStage: StageId = shouldRunSourceBeforeOutline
+      ? "source_compiled"
+      : targetStage
+    const nextStageAfterCurrent =
+      shouldRunSourceBeforeOutline && targetStage === "course_outline"
+        ? "course_outline"
+        : autoGenerateAll
+          ? nextStageFor(queuedStage)
+          : null
+
+    const job = await this.db.transaction(async (client) => {
+      const created = await client.query<Record<string, unknown>>(
+        `
+        insert into processing_jobs (
+          id, project_id, stage, status, payload_json, result_json, error_text, started_at, finished_at, created_at
+        ) values (
+          $1, $2, $3, 'queued', $4::jsonb, null, null, null, null, now()
+        )
+        returning *
+      `,
+        [
+          randomUUID(),
+          projectId,
+          queuedStage,
+          JSON.stringify({
+            stage: queuedStage,
+            trigger: autoGenerateAll ? "auto" : "manual",
+            promptKeys: promptKeysForStage(queuedStage),
+            autoGenerateAll,
+            nextStage: nextStageAfterCurrent,
+          }),
+        ]
+      )
+
+      await client.query(
+        `
+        update projects
+        set
+          current_stage = $2,
+          status = 'processing',
+          progress = $3,
+          updated_at = now(),
+          logs = $4::jsonb
+        where id = $1
+      `,
+        [
+          projectId,
+          queuedStage,
+          progressFor(queuedStage, "processing"),
+          JSON.stringify(
+            [
+              autoGenerateAll
+                ? `Запущена автогенерация с этапа ${queuedStage}.`
+                : `Запущена генерация этапа ${queuedStage}.`,
+              ...(project.logs ?? []),
+            ].slice(0, 10)
+          ),
+        ]
+      )
+
+      return mapJobRow(created.rows[0] ?? {})
+    })
+
+    await this.queue.enqueueProcessingJob({
+      jobId: job.id,
+      projectId,
+      stage: job.stage,
+      trigger: autoGenerateAll ? "auto" : "manual",
+    })
+
+    return {
+      project: await this.getProject(projectId),
+      job,
+    }
   }
 
   async getProjectStatus(id: string) {
@@ -807,7 +1013,7 @@ export class EcolmsStore {
             nextStage,
             JSON.stringify({
               stage: nextStage,
-              trigger: "approval",
+              trigger: "manual",
               promptKeys: promptKeysForStage(nextStage),
             }),
           ]
@@ -841,7 +1047,7 @@ export class EcolmsStore {
           jobId: queuedJob.id,
           projectId,
           stage: nextStage,
-          trigger: "approval",
+          trigger: "manual",
         })
       }
     }
@@ -943,8 +1149,11 @@ export class EcolmsStore {
     if (!row) {
       throw new NotFoundException("Проект не найден")
     }
-    const sourceFiles = await this.listSourceFiles(id)
-    return mapProjectRow(row, sourceFiles)
+    const [sourceFiles, jobs] = await Promise.all([
+      this.listSourceFiles(id),
+      this.listJobs(id),
+    ])
+    return mapProjectRow(row, sourceFiles, jobs)
   }
 
   private async loadProjectDetail(id: string) {

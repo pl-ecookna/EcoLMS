@@ -16,7 +16,6 @@ export const projectStatusLabels: Record<ProjectStatus, string> = {
   draft: "Черновик",
   uploaded: "Создан",
   processing: "В обработке",
-  awaiting_review: "Ожидает подтверждения",
   completed: "Готов",
   failed: "Ошибка",
 }
@@ -26,7 +25,6 @@ export type ProjectStatus =
   | "draft"
   | "uploaded"
   | "processing"
-  | "awaiting_review"
   | "completed"
   | "failed"
 export type JobStatus = "queued" | "processing" | "done" | "failed"
@@ -227,11 +225,41 @@ export async function createProject(input: {
   })
 }
 
+export async function updateProject(
+  projectId: string,
+  input: {
+    name?: string
+    note?: string
+  }
+) {
+  return requestJson<ProjectDetailRecord>(`/api/projects/${projectId}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  })
+}
+
 export async function startProject(projectId: string) {
   return requestJson<{ project: ProjectDetailRecord; job: ProcessingJobRecord }>(
     `/api/projects/${projectId}/start`,
     {
       method: "POST",
+    }
+  )
+}
+
+export async function generateStage(
+  projectId: string,
+  input: {
+    stage: "course_outline" | "course_content" | "course_test"
+    autoGenerateAll?: boolean
+    overwriteExisting?: boolean
+  }
+) {
+  return requestJson<{ project: ProjectDetailRecord; job: ProcessingJobRecord }>(
+    `/api/projects/${projectId}/generate`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
     }
   )
 }
@@ -274,6 +302,15 @@ export async function abortUpload(uploadId: string) {
   })
 }
 
+export async function deleteSourceFile(projectId: string, sourceFileId: string) {
+  return requestJson<ProjectDetailRecord>(
+    `/api/projects/${projectId}/source-files/${sourceFileId}`,
+    {
+      method: "DELETE",
+    }
+  )
+}
+
 export async function listArtifacts(projectId: string) {
   return requestJson<ArtifactRecord[]>(`/api/projects/${projectId}/artifacts`)
 }
@@ -286,16 +323,6 @@ export async function updateArtifact(
   return requestJson<ArtifactRecord>(`/api/projects/${projectId}/artifacts/${artifactId}`, {
     method: "PUT",
     body: JSON.stringify({ contentMd }),
-  })
-}
-
-export async function approveArtifact(projectId: string, artifactId: string) {
-  return requestJson<{
-    review: StageReviewRecord
-    nextStage: StageId | null
-    project: ProjectDetailRecord
-  }>(`/api/projects/${projectId}/artifacts/${artifactId}/approve`, {
-    method: "POST",
   })
 }
 

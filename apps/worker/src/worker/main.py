@@ -250,6 +250,31 @@ def stage_prompt_metadata(stage: str) -> dict[str, Any]:
     }
 
 
+STAGE_ORDER = ["source_compiled", "course_outline", "course_content", "course_test"]
+
+
+def next_stage(stage: str) -> str | None:
+    try:
+        index = STAGE_ORDER.index(stage)
+    except ValueError:
+        return None
+    return STAGE_ORDER[index + 1] if index + 1 < len(STAGE_ORDER) else None
+
+
+def progress_for_stage(stage: str, *, completed: bool) -> int:
+    if completed:
+        return 100
+    if stage == "source_compiled":
+        return 18
+    if stage == "course_outline":
+        return 44
+    if stage == "course_content":
+        return 68
+    if stage == "course_test":
+        return 88
+    return 0
+
+
 def ensure_stage_artifact(
     conn: psycopg.Connection, job: dict[str, Any], markdown: str, metadata: dict[str, Any]
 ) -> None:
@@ -408,29 +433,99 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
         markdown = make_stage_markdown(
             project["name"], job["stage"], project["source_summary"]
         )
+        payload = job.get("payload_json") or {}
+        if isinstance(payload, str):
+            payload = json.loads(payload)
         prompt_metadata = stage_prompt_metadata(job["stage"])
+        auto_generate_all = bool(payload.get("autoGenerateAll"))
+        queued_next_stage = payload.get("nextStage")
+        if queued_next_stage is not None and not isinstance(queued_next_stage, str):
+            queued_next_stage = None
+        resolved_next_stage = queued_next_stage or (
+            next_stage(job["stage"]) if auto_generate_all else None
+        )
+        should_finish_course = resolved_next_stage is None and job["stage"] == "course_test"
+        next_job_payload = None
 
         with conn.transaction():
             set_job_processing(conn, job["id"])
             append_project_log(conn, project["id"], f"Worker начал обработку job {job['stage']}.")
             ensure_stage_artifact(conn, job, markdown, prompt_metadata)
             set_job_done(conn, job["id"], job["stage"], prompt_metadata)
-            conn.execute(
-                """
-                update projects
-                set
-                  status = 'awaiting_review',
-                  progress = case
-                    when current_stage = 'source_compiled' then 18
-                    when current_stage = 'course_outline' then 44
-                    when current_stage = 'course_content' then 68
-                    when current_stage = 'course_test' then 88
-                    else progress
-                  end,
-                  updated_at = now()
-                where id = %s
-                """,
-                (project["id"],),
+            if resolved_next_stage:
+                next_job_id = f"{project['id']}-{resolved_next_stage}-{int(time.time() * 1000)}"
+                next_job_payload = {
+                    "jobId": next_job_id,
+                    "projectId": project["id"],
+                    "stage": resolved_next_stage,
+                    "trigger": "auto" if auto_generate_all else "manual",
+                }
+                conn.execute(
+                    """
+                    insert into processing_jobs (
+                      id, project_id, stage, status, payload_json, result_json, error_text, started_at, finished_at, created_at
+                    ) values (
+                      %s, %s, %s, 'queued', %s::jsonb, null, null, null, null, now()
+                    )
+                    """,
+                    (
+                        next_job_id,
+                        project["id"],
+                        resolved_next_stage,
+                        json.dumps(
+                            {
+                                "stage": resolved_next_stage,
+                                "trigger": "auto" if auto_generate_all else "manual",
+                                "autoGenerateAll": auto_generate_all,
+                                "nextStage": next_stage(resolved_next_stage)
+                                if auto_generate_all
+                                else None,
+                            },
+                            ensure_ascii=False,
+                        ),
+                    ),
+                )
+                conn.execute(
+                    """
+                    update projects
+                    set
+                      current_stage = %s,
+                      status = 'processing',
+                      progress = %s,
+                      updated_at = now()
+                    where id = %s
+                    """,
+                    (
+                        resolved_next_stage,
+                        progress_for_stage(resolved_next_stage, completed=False),
+                        project["id"],
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    update projects
+                    set
+                      current_stage = %s,
+                      status = %s,
+                      progress = %s,
+                      updated_at = now()
+                    where id = %s
+                    """,
+                    (
+                        job["stage"],
+                        "completed" if should_finish_course else "uploaded",
+                        progress_for_stage(job["stage"], completed=should_finish_course),
+                        project["id"],
+                    ),
+                )
+
+        if next_job_payload:
+            redis_command(
+                config.redis_url,
+                "LPUSH",
+                config.job_queue_key,
+                json.dumps(next_job_payload, ensure_ascii=False),
             )
 
         print(
@@ -452,6 +547,14 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
             pass
         try:
             set_job_failed(conn, job_message["jobId"], str(exc))
+            conn.execute(
+                """
+                update projects
+                set status = 'failed', updated_at = now()
+                where id = %s
+                """,
+                (job_message["projectId"],),
+            )
             conn.commit()
         except Exception:
             pass

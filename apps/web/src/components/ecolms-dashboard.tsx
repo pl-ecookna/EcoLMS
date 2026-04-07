@@ -3,14 +3,9 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react"
 import {
   AlertCircleIcon,
-  CheckCircle2Icon,
-  ChevronDownIcon,
-  FileDownIcon,
   FileTextIcon,
   Loader2Icon,
-  PencilLineIcon,
   PlusIcon,
-  PlayIcon,
   RefreshCwIcon,
   SaveIcon,
   SparklesIcon,
@@ -63,20 +58,18 @@ import { cn } from "@/lib/utils"
 
 import {
   abortUpload,
-  approveArtifact,
   completeUpload,
   createProject,
-  downloadProject,
+  deleteSourceFile,
+  generateStage,
   getProject,
   initUpload,
   listProjects,
   projectStatusLabels,
   signUploadPart,
   stageLabels,
-  stageOrder,
-  startProject,
   updateArtifact,
-  type ProcessingJobRecord,
+  updateProject,
   type ProjectDetailRecord,
   type ProjectRecord,
   type ProjectStatus,
@@ -113,6 +106,13 @@ const SUPPORTED_CREATE_EXTENSIONS = new Set([
   "mpg",
 ])
 
+type GenerationStage = "course_outline" | "course_content" | "course_test"
+const VISIBLE_STAGES: GenerationStage[] = [
+  "course_outline",
+  "course_content",
+  "course_test",
+]
+
 type UploadPhase = "idle" | "uploading" | "done" | "error"
 type UploadContext = "create" | "detail" | null
 
@@ -126,25 +126,10 @@ function projectStatusBadgeVariant(
       return "secondary"
     case "processing":
       return "default"
-    case "awaiting_review":
-      return "secondary"
     case "completed":
       return "default"
     case "failed":
       return "destructive"
-  }
-}
-
-function stageStatusBadgeVariant(status: ProcessingJobRecord["status"]) {
-  switch (status) {
-    case "done":
-      return "default" as const
-    case "processing":
-      return "secondary" as const
-    case "failed":
-      return "destructive" as const
-    default:
-      return "outline" as const
   }
 }
 
@@ -167,21 +152,15 @@ function fileKind(file: File) {
   return "document"
 }
 
-function getStageArtifact(
-  project: ProjectDetailRecord | null,
-  stage: StageId,
-  format: "md" | "json" = "md"
-) {
+function getStageArtifact(project: ProjectDetailRecord | null, stage: StageId) {
   return project?.artifacts.find(
-    (artifact) => artifact.stage === stage && artifact.format === format
+    (artifact) => artifact.stage === stage && artifact.format === "md"
   )
 }
 
 function getStageMarkdown(project: ProjectDetailRecord | null, stage: StageId) {
   return (
-    getStageArtifact(project, stage, "md")?.contentMd ??
-    project?.stageDrafts[stage] ??
-    ""
+    getStageArtifact(project, stage)?.contentMd ?? project?.stageDrafts[stage] ?? ""
   )
 }
 
@@ -195,49 +174,6 @@ function formatDateLabel(value: string) {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(date)
-}
-
-function stageBadgeLabel(status: ProcessingJobRecord["status"]) {
-  switch (status) {
-    case "done":
-      return "Готов"
-    case "processing":
-      return "В работе"
-    case "failed":
-      return "Ошибка"
-    default:
-      return "Ожидает"
-  }
-}
-
-function sourceFileStatusLabel(status: string) {
-  switch (status) {
-    case "completed":
-      return "Загружен"
-    case "uploading":
-      return "Выгружается"
-    case "aborted":
-      return "Прерван"
-    default:
-      return "Ожидает"
-  }
-}
-
-function stageLabelForProject(project: ProjectRecord) {
-  return stageLabels[project.currentStage]
-}
-
-function statusAccent(status: ProjectStatus) {
-  switch (status) {
-    case "awaiting_review":
-      return "border-l-2 border-l-primary/60"
-    case "failed":
-      return "border-l-2 border-l-destructive/60"
-    case "processing":
-      return "border-l-2 border-l-secondary-foreground/30"
-    default:
-      return "border-l-2 border-l-transparent"
-  }
 }
 
 function getFileExtension(fileName: string) {
@@ -254,6 +190,24 @@ function isSupportedCreateFile(file: File) {
   return SUPPORTED_CREATE_EXTENSIONS.has(extension)
 }
 
+function isStageDone(project: ProjectDetailRecord | null, stage: StageId) {
+  const stageStatus = project?.stages.find((item) => item.id === stage)?.status
+  return stageStatus === "done"
+}
+
+function sourceFileStatusLabel(status: string) {
+  switch (status) {
+    case "completed":
+      return "Загружен"
+    case "uploading":
+      return "Выгружается"
+    case "aborted":
+      return "Прерван"
+    default:
+      return "Ожидает"
+  }
+}
+
 export function EcolmsDashboard() {
   const [projects, setProjects] = useState<ProjectRecord[]>([])
   const [projectTotal, setProjectTotal] = useState(0)
@@ -261,21 +215,19 @@ export function EcolmsDashboard() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [selectedProject, setSelectedProject] =
     useState<ProjectDetailRecord | null>(null)
-  const [selectedStage, setSelectedStage] = useState<StageId>("source_compiled")
+  const [selectedStage, setSelectedStage] = useState<GenerationStage>("course_outline")
   const [editorValue, setEditorValue] = useState("")
   const [isEditing, setIsEditing] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [editOpen, setEditOpen] = useState(false)
-  const [showActionPanel, setShowActionPanel] = useState(false)
-  const [showStagePathPanel, setShowStagePathPanel] = useState(false)
   const [courseName, setCourseName] = useState("")
   const [courseNote, setCourseNote] = useState("")
-  const [regenerationContext, setRegenerationContext] = useState("")
   const [createFiles, setCreateFiles] = useState<File[]>([])
   const [createDropActive, setCreateDropActive] = useState(false)
   const [createFilesError, setCreateFilesError] = useState<string | null>(null)
   const createFilesInputRef = useRef<HTMLInputElement | null>(null)
   const [detailFiles, setDetailFiles] = useState<File[]>([])
+  const [regenerationContext, setRegenerationContext] = useState("")
   const [listLoading, setListLoading] = useState(true)
   const [detailLoading, setDetailLoading] = useState(false)
   const [mutating, setMutating] = useState(false)
@@ -287,11 +239,7 @@ export function EcolmsDashboard() {
   const [detailError, setDetailError] = useState<string | null>(null)
 
   const totalPages = Math.max(1, Math.ceil(projectTotal / PAGE_SIZE))
-  const currentStageArtifact = getStageArtifact(
-    selectedProject,
-    selectedStage,
-    "md"
-  )
+  const currentStageArtifact = getStageArtifact(selectedProject, selectedStage)
 
   async function refreshProjects(nextPage = page) {
     setListLoading(true)
@@ -326,8 +274,12 @@ export function EcolmsDashboard() {
     try {
       const response = await getProject(projectId)
       setSelectedProject(response)
-      setSelectedStage(response.currentStage)
-      setEditorValue(getStageMarkdown(response, response.currentStage))
+      const firstVisible =
+        (VISIBLE_STAGES.find((stage) => stage === response.currentStage) as
+          | GenerationStage
+          | undefined) ?? "course_outline"
+      setSelectedStage(firstVisible)
+      setEditorValue(getStageMarkdown(response, firstVisible))
       setIsEditing(false)
       return response
     } catch (error) {
@@ -353,30 +305,18 @@ export function EcolmsDashboard() {
 
   useEffect(() => {
     if (!selectedProject) {
-      return
-    }
-
-    setSelectedStage(selectedProject.currentStage)
-    setEditorValue(getStageMarkdown(selectedProject, selectedProject.currentStage))
-    setIsEditing(false)
-  }, [selectedProject])
-
-  useEffect(() => {
-    if (!selectedProject) {
-      return
-    }
-
-    setEditorValue(getStageMarkdown(selectedProject, selectedStage))
-  }, [selectedProject, selectedStage])
-
-  useEffect(() => {
-    if (!selectedProject) {
       setRegenerationContext("")
       return
     }
-
     setRegenerationContext(selectedProject.sourceSummary || "")
   }, [selectedProject])
+
+  useEffect(() => {
+    if (!selectedProject) {
+      return
+    }
+    setEditorValue(getStageMarkdown(selectedProject, selectedStage))
+  }, [selectedProject, selectedStage])
 
   function resetUploadState() {
     setUploadPhase("idle")
@@ -439,13 +379,7 @@ export function EcolmsDashboard() {
   function handleCreateFilesDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault()
     setCreateDropActive(false)
-
-    const dropped = Array.from(event.dataTransfer.files ?? [])
-    if (!dropped.length) {
-      return
-    }
-
-    selectCreateFiles(dropped)
+    selectCreateFiles(Array.from(event.dataTransfer.files ?? []))
   }
 
   async function uploadFilesForProject(
@@ -480,7 +414,6 @@ export function EcolmsDashboard() {
 
         const partSize = init.partSize || PART_SIZE_BYTES
         const totalParts = Math.max(1, Math.ceil(file.size / partSize))
-        let uploadAborted = false
 
         try {
           for (let partNumber = 1; partNumber <= totalParts; partNumber += 1) {
@@ -506,13 +439,8 @@ export function EcolmsDashboard() {
 
           await completeUpload(init.uploadId)
         } catch (error) {
-          uploadAborted = true
           await abortUpload(init.uploadId).catch(() => undefined)
           throw error
-        } finally {
-          if (uploadAborted) {
-            setUploadMessage(`Загрузка ${file.name} прервана`)
-          }
         }
       }
 
@@ -545,8 +473,6 @@ export function EcolmsDashboard() {
 
       setSelectedId(created.id)
       setSelectedProject(created)
-      setSelectedStage(created.currentStage)
-      setEditorValue(getStageMarkdown(created, created.currentStage))
       setPage(1)
 
       if (createFiles.length > 0) {
@@ -561,7 +487,6 @@ export function EcolmsDashboard() {
       setCreateFiles([])
       setCreateFilesError(null)
       setCreateDropActive(false)
-      setDetailFiles([])
       setCreateOpen(false)
       resetUploadState()
     } catch (error) {
@@ -584,21 +509,6 @@ export function EcolmsDashboard() {
     }
   }
 
-  async function handleStartProject() {
-    if (!selectedProject) {
-      return
-    }
-
-    setMutating(true)
-    try {
-      await startProject(selectedProject.id)
-      await refreshProjects(page)
-      await refreshProject(selectedProject.id)
-    } finally {
-      setMutating(false)
-    }
-  }
-
   async function handleSaveDraft() {
     if (!selectedProject || !currentStageArtifact) {
       return
@@ -614,165 +524,100 @@ export function EcolmsDashboard() {
     }
   }
 
-  async function handleApproveStage() {
-    if (!selectedProject || !currentStageArtifact) {
+  async function handleSaveContext() {
+    if (!selectedProject) {
       return
     }
-
     setMutating(true)
     try {
-      const response = await approveArtifact(selectedProject.id, currentStageArtifact.id)
-      setSelectedProject(response.project)
-      setSelectedId(response.project.id)
-      setSelectedStage(response.project.currentStage)
-      setEditorValue(getStageMarkdown(response.project, response.project.currentStage))
+      await updateProject(selectedProject.id, { note: regenerationContext })
       await refreshProjects(page)
+      await refreshProject(selectedProject.id)
     } finally {
       setMutating(false)
     }
   }
 
-  async function handleDownloadArtifact(stage: StageId, format: "md" | "json") {
+  async function handleDeleteSourceFile(sourceFileId: string) {
     if (!selectedProject) {
       return
     }
-
-    const assets = await downloadProject(selectedProject.id)
-    const asset = assets.find(
-      (item) => item.stage === stage && item.format === format
-    )
-    if (asset) {
-      window.open(asset.downloadUrl, "_blank", "noopener,noreferrer")
-    }
-  }
-
-  async function handleRegenerationFromSheet() {
-    if (!selectedProject) {
+    const confirmed = window.confirm("Удалить файл из курса?")
+    if (!confirmed) {
       return
     }
 
     setMutating(true)
-    setListError(null)
-
     try {
-      await startProject(selectedProject.id)
+      await deleteSourceFile(selectedProject.id, sourceFileId)
       await refreshProjects(page)
       await refreshProject(selectedProject.id)
-      setEditOpen(false)
-      setListError(
-        "Перегенерация запущена. Контекст сохранён локально в интерфейсе; API-сохранение контекста будет добавлено отдельным endpoint."
+    } finally {
+      setMutating(false)
+    }
+  }
+
+  async function handleGenerate(stage: GenerationStage, autoGenerateAll = false) {
+    if (!selectedProject) {
+      return
+    }
+
+    const generatedAlready = isStageDone(selectedProject, stage)
+    let overwriteExisting = false
+
+    if (generatedAlready) {
+      overwriteExisting = window.confirm(
+        `Этап "${stageLabels[stage]}" уже создан. Перезаписать результат?`
       )
+      if (!overwriteExisting) {
+        return
+      }
+    }
+
+    setMutating(true)
+    setListError(null)
+    try {
+      await generateStage(selectedProject.id, {
+        stage,
+        autoGenerateAll,
+        overwriteExisting,
+      })
+      await refreshProjects(page)
+      await refreshProject(selectedProject.id)
+      setIsEditing(false)
+      setSelectedStage(stage)
+    } catch (error) {
+      setListError(error instanceof Error ? error.message : "Не удалось запустить генерацию")
     } finally {
       setMutating(false)
     }
   }
 
   const summary = useMemo(() => {
-    const awaiting = projects.filter(
-      (project) => project.status === "awaiting_review"
-    ).length
+    const processing = projects.filter((project) => project.status === "processing").length
     const completed = projects.filter((project) => project.status === "completed").length
-    const processing = projects.filter(
-      (project) => project.status === "processing"
-    ).length
     const withFiles = projects.filter((project) => project.sourceFiles.length > 0).length
 
     return {
       total: projectTotal,
-      awaiting,
       processing,
       completed,
       withFiles,
     }
   }, [projectTotal, projects])
 
-  const attentionProjects = useMemo(
-    () =>
-      projects.filter(
-        (project) =>
-          project.status === "awaiting_review" || project.status === "failed"
-      ),
-    [projects]
-  )
-
-  const createUploadVisible = uploadContext === "create" && uploadPhase !== "idle"
   const detailUploadVisible = uploadContext === "detail" && uploadPhase !== "idle"
+  const createUploadVisible = uploadContext === "create" && uploadPhase !== "idle"
 
-  async function handlePrimaryAction() {
-    if (!selectedProject) {
-      return
-    }
+  const canGenerateOutline = Boolean(selectedProject?.sourceFiles.length)
+  const canGenerateContent = isStageDone(selectedProject, "course_outline")
+  const canGenerateTest = isStageDone(selectedProject, "course_content")
 
-    switch (selectedProject.status) {
-      case "draft": {
-        setEditOpen(true)
-        break
-      }
-      case "uploaded": {
-        await handleStartProject()
-        break
-      }
-      case "processing": {
-        await refreshProject(selectedProject.id)
-        await refreshProjects(page)
-        break
-      }
-      case "awaiting_review": {
-        setSelectedStage(selectedProject.currentStage)
-        break
-      }
-      case "completed": {
-        await handleDownloadArtifact(selectedProject.currentStage, "md")
-        break
-      }
-      case "failed": {
-        setEditOpen(true)
-        break
-      }
-    }
+  const generationLabelByStage: Record<GenerationStage, string> = {
+    course_outline: "Создать план",
+    course_content: "Создать материалы",
+    course_test: "Создать тест",
   }
-
-  const primaryActionLabel = (() => {
-    if (!selectedProject) {
-      return "Выберите курс"
-    }
-
-    switch (selectedProject.status) {
-      case "draft":
-        return "Добавить файлы"
-      case "uploaded":
-        return "Запустить обработку"
-      case "processing":
-        return "Обновить статус"
-      case "awaiting_review":
-        return "Открыть этап на проверку"
-      case "completed":
-        return "Скачать результат"
-      case "failed":
-        return "Перейти в журнал"
-    }
-  })()
-
-  const primaryActionHint = (() => {
-    if (!selectedProject) {
-      return "Выберите курс в левой колонке, чтобы увидеть рабочие действия."
-    }
-
-    switch (selectedProject.status) {
-      case "draft":
-        return "После загрузки исходников курс будет готов к запуску обработки."
-      case "uploaded":
-        return "Система запустит генерацию этапов и создаст задания в очереди."
-      case "processing":
-        return "Обновите карточку, чтобы проверить текущий прогресс по этапам."
-      case "awaiting_review":
-        return "Проверьте текущий этап, внесите правки и подтвердите результат."
-      case "completed":
-        return "Итоговый артефакт доступен для выгрузки в формате Markdown."
-      case "failed":
-        return "Откройте журнал, чтобы посмотреть текст ошибки и перезапустить job."
-    }
-  })()
 
   return (
     <>
@@ -787,17 +632,8 @@ export function EcolmsDashboard() {
               <h1 className="font-heading text-3xl font-semibold tracking-tight">
                 Рабочее пространство EcoLMS
               </h1>
-              <p className="text-sm text-muted-foreground">
-                Операционный экран для запуска, проверки и выпуска материалов курса.
-              </p>
             </div>
             <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 bg-secondary/70 px-4 py-2">
-                <span className="size-2 bg-primary" />
-                <span className="font-heading text-sm font-bold tracking-[0.06em] text-foreground">
-                  ECOOKNA GROUP
-                </span>
-              </div>
               <Button
                 variant="outline"
                 onClick={() => {
@@ -819,28 +655,28 @@ export function EcolmsDashboard() {
           </header>
 
           <section className="grid grid-cols-4 gap-3">
-            <Card size="sm" className="border-border/80 bg-secondary/35">
+            <Card size="sm">
               <CardHeader>
                 <CardDescription>Всего курсов</CardDescription>
                 <CardTitle className="text-3xl">{summary.total}</CardTitle>
               </CardHeader>
             </Card>
-            <Card size="sm" className="border-border/80 bg-secondary/35">
-              <CardHeader>
-                <CardDescription>Требуют внимания</CardDescription>
-                <CardTitle className="text-3xl">{summary.awaiting}</CardTitle>
-              </CardHeader>
-            </Card>
-            <Card size="sm" className="border-border/80 bg-secondary/35">
+            <Card size="sm">
               <CardHeader>
                 <CardDescription>В обработке</CardDescription>
                 <CardTitle className="text-3xl">{summary.processing}</CardTitle>
               </CardHeader>
             </Card>
-            <Card size="sm" className="border-border/80 bg-secondary/35">
+            <Card size="sm">
               <CardHeader>
                 <CardDescription>Готово</CardDescription>
                 <CardTitle className="text-3xl">{summary.completed}</CardTitle>
+              </CardHeader>
+            </Card>
+            <Card size="sm">
+              <CardHeader>
+                <CardDescription>С файлами</CardDescription>
+                <CardTitle className="text-3xl">{summary.withFiles}</CardTitle>
               </CardHeader>
             </Card>
           </section>
@@ -857,18 +693,10 @@ export function EcolmsDashboard() {
             <Card className="overflow-hidden border-border/80 bg-card">
               <CardHeader className="border-b bg-secondary/35">
                 <CardTitle>Курсы</CardTitle>
-                <CardDescription>
-                  Список курсов и их текущий этап обработки.
-                </CardDescription>
-                <div className="flex flex-wrap gap-2 pt-1">
-                  <Badge variant="outline">С файлами: {summary.withFiles}</Badge>
-                  <Badge variant={attentionProjects.length ? "secondary" : "outline"}>
-                    На контроле: {attentionProjects.length}
-                  </Badge>
-                </div>
+                <CardDescription>Список курсов и текущий статус.</CardDescription>
               </CardHeader>
               <CardContent className="p-0">
-                <ScrollArea className="h-[calc(100vh-380px)]">
+                <ScrollArea className="h-[calc(100vh-360px)]">
                   <div className="flex flex-col">
                     {listLoading ? (
                       Array.from({ length: 7 }).map((_, index) => (
@@ -882,13 +710,10 @@ export function EcolmsDashboard() {
                           key={project.id}
                           variant="ghost"
                           className={cn(
-                            "h-auto w-full justify-start rounded-none border-b border-border/60 px-4 py-3 text-left transition-colors hover:bg-secondary/35",
-                            statusAccent(project.status),
+                            "h-auto w-full justify-start rounded-none border-b border-border/60 px-4 py-3 text-left",
                             project.id === selectedProject?.id && "bg-muted"
                           )}
-                          onClick={() => {
-                            setSelectedId(project.id)
-                          }}
+                          onClick={() => setSelectedId(project.id)}
                         >
                           <div className="flex w-full flex-col gap-2">
                             <div className="flex items-start justify-between gap-2">
@@ -903,7 +728,7 @@ export function EcolmsDashboard() {
                               </Badge>
                             </div>
                             <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                              <span>{stageLabelForProject(project)}</span>
+                              <span>{stageLabels[project.currentStage]}</span>
                               <span>{formatDateLabel(project.updatedAt)}</span>
                             </div>
                           </div>
@@ -994,7 +819,7 @@ export function EcolmsDashboard() {
                         </CardTitle>
                         <CardDescription>
                           {selectedProject.overview ||
-                            "Курс готов к загрузке исходников и последовательной сборке материалов."}
+                            "Сначала создайте план, затем материалы и тест."}
                         </CardDescription>
                       </div>
                       <div className="flex items-center gap-2">
@@ -1023,225 +848,143 @@ export function EcolmsDashboard() {
                   ) : null}
 
                   <CardContent className="space-y-4 p-4">
-                    <Card size="sm" className="border-border/80 bg-background">
-                      <CardHeader className="pb-3">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          className="h-auto w-full justify-between px-0 text-left"
-                          onClick={() => setShowStagePathPanel((current) => !current)}
-                        >
-                          <div>
-                            <CardTitle className="text-base">Путь по этапам</CardTitle>
-                            <CardDescription>
-                              Текущий этап: {stageLabels[selectedProject.currentStage]}
-                            </CardDescription>
-                          </div>
-                          <ChevronDownIcon
-                            className={cn(
-                              "size-4 transition-transform",
-                              showStagePathPanel && "rotate-180"
-                            )}
-                          />
-                        </Button>
-                      </CardHeader>
-                      {showStagePathPanel ? (
-                        <CardContent className="grid grid-cols-4 gap-2">
-                          {stageOrder.map((stage) => {
-                            const stageState = selectedProject.stages.find(
-                              (item) => item.id === stage
-                            )
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-sm text-muted-foreground">
+                        Линейная генерация: План → Материалы → Тест
+                      </div>
+                      <Button
+                        variant="outline"
+                        onClick={() => void handleGenerate("course_outline", true)}
+                        disabled={!canGenerateOutline || mutating}
+                      >
+                        Запустить всё автоматически
+                      </Button>
+                    </div>
+
+                    <div className="grid grid-cols-[320px_minmax(0,1fr)] gap-4">
+                      <Card>
+                        <CardHeader>
+                          <CardTitle>Материалы курса</CardTitle>
+                          <CardDescription>
+                            Выберите блок и запустите генерацию по шагам.
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-2">
+                          {VISIBLE_STAGES.map((stage) => {
+                            const stageStatus =
+                              selectedProject.stages.find((item) => item.id === stage)?.status ??
+                              "queued"
+                            const disabledCreate =
+                              stage === "course_outline"
+                                ? !canGenerateOutline
+                                : stage === "course_content"
+                                  ? !canGenerateContent
+                                  : !canGenerateTest
+
                             return (
                               <div
                                 key={stage}
                                 className={cn(
-                                  "border px-3 py-2",
-                                  selectedProject.currentStage === stage && "border-primary/60"
+                                  "border px-3 py-3",
+                                  selectedStage === stage && "border-primary/60 bg-muted/20"
                                 )}
                               >
-                                <div className="text-xs font-medium">{stageLabels[stage]}</div>
-                                <div className="mt-1 flex items-center gap-2">
-                                  <Badge
-                                    variant={stageStatusBadgeVariant(stageState?.status ?? "queued")}
-                                  >
-                                    {stageBadgeLabel(stageState?.status ?? "queued")}
+                                <button
+                                  type="button"
+                                  className="flex w-full items-start justify-between text-left"
+                                  onClick={() => {
+                                    setSelectedStage(stage)
+                                    setIsEditing(false)
+                                  }}
+                                >
+                                  <div className="space-y-1">
+                                    <div className="font-medium">{stageLabels[stage]}</div>
+                                    <div className="text-xs text-muted-foreground">
+                                      {stageStatus === "done"
+                                        ? "Сгенерировано"
+                                        : "Ещё не сгенерировано"}
+                                    </div>
+                                  </div>
+                                  <Badge variant={stageStatus === "done" ? "default" : "outline"}>
+                                    {stageStatus === "done" ? "Готов" : "Ожидает"}
                                   </Badge>
+                                </button>
+                                <div className="mt-3">
+                                  <Button
+                                    size="sm"
+                                    variant={stageStatus === "done" ? "outline" : "default"}
+                                    onClick={() => void handleGenerate(stage)}
+                                    disabled={disabledCreate || mutating}
+                                  >
+                                    {generationLabelByStage[stage]}
+                                  </Button>
                                 </div>
                               </div>
                             )
                           })}
                         </CardContent>
-                      ) : null}
-                    </Card>
+                      </Card>
 
-                    <Card size="sm" className="border-border/80 bg-background">
-                      <CardHeader className="pb-3">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          className="h-auto w-full justify-between px-0 text-left"
-                          onClick={() => setShowActionPanel((current) => !current)}
-                        >
-                          <div>
-                            <CardTitle className="text-base">Главное действие</CardTitle>
-                            <CardDescription>{primaryActionHint}</CardDescription>
+                      <Card>
+                        <CardHeader>
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="space-y-1">
+                              <CardTitle>{stageLabels[selectedStage]}</CardTitle>
+                              <CardDescription>
+                                Можно редактировать и сохранять итоговый текст этапа.
+                              </CardDescription>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                variant="outline"
+                                onClick={() => setIsEditing((current) => !current)}
+                                disabled={detailLoading || mutating}
+                              >
+                                {isEditing ? "Просмотр" : "Редактировать"}
+                              </Button>
+                              <Button
+                                variant="secondary"
+                                onClick={() => void handleSaveDraft()}
+                                disabled={mutating || !currentStageArtifact}
+                              >
+                                <SaveIcon data-icon="inline-start" />
+                                Сохранить
+                              </Button>
+                            </div>
                           </div>
-                          <ChevronDownIcon
-                            className={cn(
-                              "size-4 transition-transform",
-                              showActionPanel && "rotate-180"
-                            )}
-                          />
-                        </Button>
-                      </CardHeader>
-                      {showActionPanel ? (
-                        <CardContent className="flex items-center justify-between gap-3">
-                          <Button
-                            onClick={() => void handlePrimaryAction()}
-                            disabled={!selectedProject || mutating}
-                          >
-                            {selectedProject?.status === "uploaded" ? (
-                              <PlayIcon data-icon="inline-start" />
-                            ) : selectedProject?.status === "processing" ? (
-                              <RefreshCwIcon data-icon="inline-start" />
-                            ) : selectedProject?.status === "completed" ? (
-                              <FileDownIcon data-icon="inline-start" />
-                            ) : (
-                              <CheckCircle2Icon data-icon="inline-start" />
-                            )}
-                            {primaryActionLabel}
-                          </Button>
-                          <div className="flex flex-wrap gap-2">
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          {isEditing ? (
+                            <Textarea
+                              value={editorValue}
+                              onChange={(event) => setEditorValue(event.target.value)}
+                              className="min-h-[520px] font-mono text-sm"
+                            />
+                          ) : (
+                            <div className="min-h-[520px] border border-border bg-muted/20 p-4">
+                              <pre className="whitespace-pre-wrap text-sm leading-6 text-foreground">
+                                {editorValue || "Пока нет данных для выбранного этапа."}
+                              </pre>
+                            </div>
+                          )}
+                          <div className="flex gap-2">
                             <Button
                               variant="outline"
-                              onClick={() => {
-                                void refreshProjects(page)
-                                void refreshProject(selectedProject.id)
-                              }}
-                              disabled={detailLoading || mutating}
+                              onClick={() => void handleGenerate(selectedStage)}
+                              disabled={
+                                (selectedStage === "course_outline" && !canGenerateOutline) ||
+                                (selectedStage === "course_content" && !canGenerateContent) ||
+                                (selectedStage === "course_test" && !canGenerateTest) ||
+                                mutating
+                              }
                             >
-                              <RefreshCwIcon data-icon="inline-start" />
-                              Обновить курс
+                              <FileTextIcon data-icon="inline-start" />
+                              {generationLabelByStage[selectedStage]}
                             </Button>
                           </div>
                         </CardContent>
-                      ) : null}
-                    </Card>
-
-                    <div className="grid grid-cols-[320px_minmax(0,1fr)] gap-4">
-                          <Card>
-                            <CardHeader>
-                              <CardTitle>Материалы курса</CardTitle>
-                              <CardDescription>
-                                Выберите этап и проверьте результат перед подтверждением.
-                              </CardDescription>
-                            </CardHeader>
-                            <CardContent className="space-y-2">
-                              {selectedProject.stages.map((stage) => (
-                                <Button
-                                  key={stage.id}
-                                  type="button"
-                                  variant={selectedStage === stage.id ? "secondary" : "outline"}
-                                  className="h-auto w-full justify-between px-3 py-3 text-left"
-                                  onClick={() => {
-                                    setSelectedStage(stage.id)
-                                    setIsEditing(false)
-                                  }}
-                                >
-                                  <div className="flex min-w-0 flex-col gap-1">
-                                    <span className="font-medium">{stageLabels[stage.id]}</span>
-                                    <span className="line-clamp-2 text-xs text-muted-foreground">
-                                      {stage.note}
-                                    </span>
-                                    <span className="text-xs text-muted-foreground">
-                                      {formatDateLabel(stage.updatedAt)}
-                                    </span>
-                                  </div>
-                                  <Badge variant={stageStatusBadgeVariant(stage.status)}>
-                                    {stageBadgeLabel(stage.status)}
-                                  </Badge>
-                                </Button>
-                              ))}
-                            </CardContent>
-                          </Card>
-
-                          <Card>
-                            <CardHeader>
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="space-y-1">
-                                  <CardTitle>{stageLabels[selectedStage]}</CardTitle>
-                                  <CardDescription>
-                                    Сначала проверьте содержание. Включайте редактирование только
-                                    при необходимости правок.
-                                  </CardDescription>
-                                </div>
-                                <div className="flex flex-wrap gap-2">
-                                  <Button
-                                    variant="outline"
-                                    onClick={() => setIsEditing((current) => !current)}
-                                    disabled={detailLoading || mutating}
-                                  >
-                                    <PencilLineIcon data-icon="inline-start" />
-                                    {isEditing
-                                      ? "Закончить редактирование"
-                                      : "Перейти к редактированию"}
-                                  </Button>
-                                  <Button
-                                    variant="secondary"
-                                    onClick={() => void handleSaveDraft()}
-                                    disabled={mutating || !currentStageArtifact}
-                                  >
-                                    <SaveIcon data-icon="inline-start" />
-                                    Сохранить
-                                  </Button>
-                                  <Button
-                                    onClick={() => void handleApproveStage()}
-                                    disabled={mutating || !currentStageArtifact}
-                                  >
-                                    <CheckCircle2Icon data-icon="inline-start" />
-                                    Подтвердить этап
-                                  </Button>
-                                </div>
-                              </div>
-                            </CardHeader>
-                            <CardContent className="space-y-4">
-                              {isEditing ? (
-                                <Textarea
-                                  value={editorValue}
-                                  onChange={(event) => {
-                                    setEditorValue(event.target.value)
-                                    setIsEditing(true)
-                                  }}
-                                  className="min-h-[500px] font-mono text-sm"
-                                />
-                              ) : (
-                                <div className="min-h-[500px] border border-border bg-muted/20 p-4">
-                                  <pre className="whitespace-pre-wrap text-sm leading-6 text-foreground">
-                                    {editorValue || "Пока нет данных для выбранного этапа."}
-                                  </pre>
-                                </div>
-                              )}
-                              <div className="flex flex-wrap gap-2">
-                                <Button
-                                  variant="outline"
-                                  onClick={() => void handleDownloadArtifact(selectedStage, "md")}
-                                >
-                                  <FileTextIcon data-icon="inline-start" />
-                                  Скачать Markdown
-                                </Button>
-                                <Button
-                                  variant="outline"
-                                  onClick={() =>
-                                    void handleDownloadArtifact(selectedStage, "json")
-                                  }
-                                >
-                                  <FileDownIcon data-icon="inline-start" />
-                                  Скачать JSON
-                                </Button>
-                              </div>
-                            </CardContent>
-                          </Card>
-                        </div>
+                      </Card>
+                    </div>
                   </CardContent>
                 </>
               ) : null}
@@ -1251,24 +994,15 @@ export function EcolmsDashboard() {
       </div>
 
       <Sheet open={createOpen} onOpenChange={setCreateOpen}>
-        <SheetContent className="w-full gap-0 sm:max-w-[700px]">
+        <SheetContent className="w-full gap-0 sm:max-w-[760px]">
           <SheetHeader className="border-b">
             <SheetTitle>Создать курс</SheetTitle>
             <SheetDescription>
-              Укажите название, добавьте контекст и при необходимости загрузите исходные файлы.
+              Укажите название, добавьте контекст и загрузите исходные файлы.
             </SheetDescription>
           </SheetHeader>
           <ScrollArea className="flex-1">
             <div className="flex flex-col gap-6 p-4">
-              <Alert>
-                <AlertCircleIcon />
-                <AlertTitle>Пакет материалов</AlertTitle>
-                <AlertDescription>
-                  Можно загрузить до 5 файлов. После создания курс сразу появится в рабочем
-                  списке.
-                </AlertDescription>
-              </Alert>
-
               <div className="flex flex-col gap-2">
                 <Label htmlFor="course-name">Название курса</Label>
                 <Input
@@ -1286,7 +1020,7 @@ export function EcolmsDashboard() {
                   value={courseNote}
                   onChange={(event) => setCourseNote(event.target.value)}
                   className="min-h-28"
-                  placeholder="Контекст для генерации: целевая аудитория, важные акценты и ограничения."
+                  placeholder="Контекст для генерации материалов."
                 />
               </div>
 
@@ -1424,31 +1158,28 @@ export function EcolmsDashboard() {
           <SheetHeader className="border-b">
             <SheetTitle>Редактировать курс</SheetTitle>
             <SheetDescription>
-              Добавляйте новые исходники и задавайте контекст для следующей перегенерации.
+              Управление контекстом и исходными файлами курса.
             </SheetDescription>
           </SheetHeader>
           <ScrollArea className="flex-1">
             <div className="flex flex-col gap-5 p-4">
               <Card>
                 <CardHeader>
-                  <CardTitle>Контекст перегенерации</CardTitle>
-                  <CardDescription>
-                    Контекст виден только в интерфейсе. Для сохранения в базе нужен отдельный API endpoint.
-                  </CardDescription>
+                  <CardTitle>Контекст генерации</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <Textarea
                     value={regenerationContext}
                     onChange={(event) => setRegenerationContext(event.target.value)}
                     className="min-h-28"
-                    placeholder="Например: акцент на практике менеджеров и обязательной терминологии."
+                    placeholder="Контекст для следующих запусков генерации."
                   />
                   <Button
-                    onClick={() => void handleRegenerationFromSheet()}
-                    disabled={!selectedProject || !selectedProject.sourceFiles.length || mutating}
+                    variant="outline"
+                    onClick={() => void handleSaveContext()}
+                    disabled={!selectedProject || mutating}
                   >
-                    <PlayIcon data-icon="inline-start" />
-                    Перегенерировать
+                    Сохранить контекст
                   </Button>
                 </CardContent>
               </Card>
@@ -1456,9 +1187,6 @@ export function EcolmsDashboard() {
               <Card>
                 <CardHeader>
                   <CardTitle>Добавить файлы</CardTitle>
-                  <CardDescription>
-                    Новые файлы добавляются к курсу и участвуют в следующем запуске.
-                  </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <Input
@@ -1505,9 +1233,6 @@ export function EcolmsDashboard() {
               <Card>
                 <CardHeader>
                   <CardTitle>Исходные файлы курса</CardTitle>
-                  <CardDescription>
-                    Удаление файла появится после добавления API endpoint удаления на backend.
-                  </CardDescription>
                 </CardHeader>
                 <CardContent className="p-0">
                   <Table>
@@ -1537,7 +1262,12 @@ export function EcolmsDashboard() {
                               {(file.sizeBytes / 1024 / 1024).toFixed(1)} МБ
                             </TableCell>
                             <TableCell>
-                              <Button size="sm" variant="outline" disabled>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => void handleDeleteSourceFile(file.id)}
+                                disabled={mutating}
+                              >
                                 Удалить
                               </Button>
                             </TableCell>

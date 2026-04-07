@@ -5,7 +5,7 @@ export type ProcessingJobMessage = {
   jobId: string
   projectId: string
   stage: "source_compiled" | "course_outline" | "course_content" | "course_test"
-  trigger: "start" | "approval" | "retry"
+  trigger: "start" | "manual" | "auto" | "retry"
 }
 
 const JOB_QUEUE_KEY = "ecolms:processing-jobs"

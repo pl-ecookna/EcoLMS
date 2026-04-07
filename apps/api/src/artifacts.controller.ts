@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Put } from "@nestjs/common"
+import { Body, Controller, Get, Param, Put } from "@nestjs/common"
 
 import { EcolmsStore } from "./store/ecolms.store"
 
@@ -39,18 +39,6 @@ export class ArtifactsController {
     return {
       success: true,
       data: await this.store.updateArtifact(id, artifactId, body.contentMd),
-      error: null,
-    }
-  }
-
-  @Post("projects/:id/artifacts/:artifactId/approve")
-  async approveArtifact(
-    @Param("id") id: string,
-    @Param("artifactId") artifactId: string
-  ) {
-    return {
-      success: true,
-      data: await this.store.approveArtifact(id, artifactId),
       error: null,
     }
   }

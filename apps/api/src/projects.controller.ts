@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common"
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from "@nestjs/common"
 
 import { EcolmsStore } from "./store/ecolms.store"
 
@@ -53,6 +62,51 @@ export class ProjectsController {
     return {
       success: true,
       data: await this.store.startProject(id),
+      error: null,
+    }
+  }
+
+  @Patch(":id")
+  async updateProject(
+    @Param("id") id: string,
+    @Body()
+    body: {
+      note?: string
+      name?: string
+    }
+  ) {
+    return {
+      success: true,
+      data: await this.store.updateProject(id, body),
+      error: null,
+    }
+  }
+
+  @Delete(":id/source-files/:sourceFileId")
+  async deleteSourceFile(
+    @Param("id") id: string,
+    @Param("sourceFileId") sourceFileId: string
+  ) {
+    return {
+      success: true,
+      data: await this.store.deleteSourceFile(id, sourceFileId),
+      error: null,
+    }
+  }
+
+  @Post(":id/generate")
+  async generateStage(
+    @Param("id") id: string,
+    @Body()
+    body: {
+      stage: "course_outline" | "course_content" | "course_test"
+      autoGenerateAll?: boolean
+      overwriteExisting?: boolean
+    }
+  ) {
+    return {
+      success: true,
+      data: await this.store.generateStage(id, body),
       error: null,
     }
   }
