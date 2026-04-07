@@ -433,7 +433,7 @@ export class EcolmsStore {
           githubRef,
           sourceSummary,
           now,
-          "Создан новый курс. После загрузки файлов можно запускать обработку.",
+          "",
           JSON.stringify(stageDrafts),
           JSON.stringify([
             trimmedName
@@ -592,6 +592,12 @@ export class EcolmsStore {
     })
 
     return this.getProject(projectId)
+  }
+
+  async deleteProject(id: string) {
+    await this.loadProjectSummary(id)
+    await this.db.query(`delete from projects where id = $1`, [id])
+    return { id, deleted: true as const }
   }
 
   async generateStage(

@@ -1,13 +1,15 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState, type DragEvent } from "react"
+import { useEffect, useRef, useState, type DragEvent } from "react"
 import {
   AlertCircleIcon,
   FileTextIcon,
   Loader2Icon,
+  MoreHorizontalIcon,
   PlusIcon,
   SaveIcon,
   SparklesIcon,
+  Trash2Icon,
   UploadIcon,
   XIcon,
 } from "lucide-react"
@@ -24,6 +26,12 @@ import {
 } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   Pagination,
   PaginationContent,
@@ -59,6 +67,7 @@ import {
   abortUpload,
   completeUpload,
   createProject,
+  deleteProject,
   deleteSourceFile,
   generateStage,
   getProject,
@@ -523,6 +532,28 @@ export function EcolmsDashboard() {
     }
   }
 
+  async function handleDeleteProject() {
+    if (!selectedProject) {
+      return
+    }
+
+    const confirmed = window.confirm(
+      `Удалить курс "${selectedProject.name}" целиком? Это действие нельзя отменить.`
+    )
+    if (!confirmed) {
+      return
+    }
+
+    setMutating(true)
+    try {
+      await deleteProject(selectedProject.id)
+      setIsEditing(false)
+      await refreshProjects(page)
+    } finally {
+      setMutating(false)
+    }
+  }
+
   async function handleSaveContext() {
     if (!selectedProject) {
       return
@@ -592,19 +623,6 @@ export function EcolmsDashboard() {
     }
   }
 
-  const summary = useMemo(() => {
-    const processing = projects.filter((project) => project.status === "processing").length
-    const completed = projects.filter((project) => project.status === "completed").length
-    const withFiles = projects.filter((project) => project.sourceFiles.length > 0).length
-
-    return {
-      total: projectTotal,
-      processing,
-      completed,
-      withFiles,
-    }
-  }, [projectTotal, projects])
-
   const detailUploadVisible = uploadContext === "detail" && uploadPhase !== "idle"
   const createUploadVisible = uploadContext === "create" && uploadPhase !== "idle"
 
@@ -626,41 +644,14 @@ export function EcolmsDashboard() {
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-2 text-xs uppercase tracking-[0.22em] text-muted-foreground">
                 <SparklesIcon className="size-4" />
-                Конструктор обучающих курсов
+                EcoLMS
               </div>
               <h1 className="font-heading text-3xl font-semibold tracking-tight">
-                Рабочее пространство EcoLMS
+                Конструктор обучающих курсов
               </h1>
             </div>
             <div />
           </header>
-
-          <section className="grid grid-cols-4 gap-3">
-            <Card size="sm">
-              <CardHeader>
-                <CardDescription>Всего курсов</CardDescription>
-                <CardTitle className="text-3xl">{summary.total}</CardTitle>
-              </CardHeader>
-            </Card>
-            <Card size="sm">
-              <CardHeader>
-                <CardDescription>В обработке</CardDescription>
-                <CardTitle className="text-3xl">{summary.processing}</CardTitle>
-              </CardHeader>
-            </Card>
-            <Card size="sm">
-              <CardHeader>
-                <CardDescription>Готово</CardDescription>
-                <CardTitle className="text-3xl">{summary.completed}</CardTitle>
-              </CardHeader>
-            </Card>
-            <Card size="sm">
-              <CardHeader>
-                <CardDescription>С файлами</CardDescription>
-                <CardTitle className="text-3xl">{summary.withFiles}</CardTitle>
-              </CardHeader>
-            </Card>
-          </section>
 
           {listError ? (
             <Alert>
@@ -806,10 +797,6 @@ export function EcolmsDashboard() {
                         <CardTitle className="truncate text-2xl">
                           {selectedProject.name}
                         </CardTitle>
-                        <CardDescription>
-                          {selectedProject.overview ||
-                            "Сначала создайте план, затем материалы и тест."}
-                        </CardDescription>
                       </div>
                       <div className="flex items-center gap-2">
                         <Badge variant={projectStatusBadgeVariant(selectedProject.status)}>
@@ -924,23 +911,35 @@ export function EcolmsDashboard() {
                                 Можно редактировать и сохранять итоговый текст этапа.
                               </CardDescription>
                             </div>
-                            <div className="flex flex-wrap gap-2">
-                              <Button
-                                variant="outline"
-                                onClick={() => setIsEditing((current) => !current)}
-                                disabled={detailLoading || mutating}
-                              >
-                                {isEditing ? "Просмотр" : "Редактировать"}
-                              </Button>
-                              <Button
-                                variant="secondary"
-                                onClick={() => void handleSaveDraft()}
-                                disabled={mutating || !currentStageArtifact}
-                              >
-                                <SaveIcon data-icon="inline-start" />
-                                Сохранить
-                              </Button>
-                            </div>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button
+                                  variant="outline"
+                                  disabled={detailLoading || mutating || !currentStageArtifact}
+                                >
+                                  <MoreHorizontalIcon data-icon="inline-start" />
+                                  Действия
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuItem
+                                  onClick={() => setIsEditing((current) => !current)}
+                                >
+                                  {isEditing ? "Просмотр" : "Редактировать"}
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => void handleSaveDraft()}>
+                                  <SaveIcon data-icon="inline-start" />
+                                  Сохранить
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => void handleDeleteProject()}
+                                  className="text-destructive focus:text-destructive"
+                                >
+                                  <Trash2Icon data-icon="inline-start" />
+                                  Удалить курс
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                           </div>
                         </CardHeader>
                         <CardContent className="space-y-4">

@@ -94,6 +94,15 @@ export class ProjectsController {
     }
   }
 
+  @Delete(":id")
+  async deleteProject(@Param("id") id: string) {
+    return {
+      success: true,
+      data: await this.store.deleteProject(id),
+      error: null,
+    }
+  }
+
   @Post(":id/generate")
   async generateStage(
     @Param("id") id: string,

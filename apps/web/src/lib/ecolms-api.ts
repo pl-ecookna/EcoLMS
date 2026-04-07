@@ -311,6 +311,12 @@ export async function deleteSourceFile(projectId: string, sourceFileId: string) 
   )
 }
 
+export async function deleteProject(projectId: string) {
+  return requestJson<{ id: string; deleted: true }>(`/api/projects/${projectId}`, {
+    method: "DELETE",
+  })
+}
+
 export async function listArtifacts(projectId: string) {
   return requestJson<ArtifactRecord[]>(`/api/projects/${projectId}/artifacts`)
 }
