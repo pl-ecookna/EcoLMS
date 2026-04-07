@@ -16,7 +16,7 @@ export const projectStatusLabels: Record<ProjectStatus, string> = {
   draft: "Черновик",
   uploaded: "Создан",
   processing: "В обработке",
-  awaiting_review: "На проверке",
+  awaiting_review: "Ожидает подтверждения",
   completed: "Готов",
   failed: "Ошибка",
 }

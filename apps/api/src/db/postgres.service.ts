@@ -14,18 +14,32 @@ const logger = new Logger("PostgresService")
 
 const INTERNAL_POSTGRES_URL =
   "postgresql://postgres:vkqze4hgid6c3yny@ecolms-lmsdb-uloxp8:5432/postgres"
+const EXTERNAL_POSTGRES_URL =
+  "postgresql://postgres:vkqze4hgid6c3yny@46.173.20.149:5434/postgres"
+
+function defaultPostgresUrl() {
+  return process.env.NODE_ENV === "production"
+    ? INTERNAL_POSTGRES_URL
+    : EXTERNAL_POSTGRES_URL
+}
 
 function normalizePostgresUrl(value: string | undefined) {
   if (!value) {
-    return INTERNAL_POSTGRES_URL
+    return defaultPostgresUrl()
   }
 
   if (
-    value.includes("46.173.20.149:5435") ||
     value.includes("localhost") ||
     value.includes("127.0.0.1")
   ) {
-    return INTERNAL_POSTGRES_URL
+    return defaultPostgresUrl()
+  }
+
+  if (
+    process.env.NODE_ENV !== "production" &&
+    value.includes("ecolms-lmsdb-uloxp8")
+  ) {
+    return EXTERNAL_POSTGRES_URL
   }
 
   return value

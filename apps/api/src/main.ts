@@ -22,7 +22,7 @@ async function bootstrap() {
     })
   )
 
-  const port = Number(process.env.API_PORT ?? 3001)
+  const port = Number(process.env.API_PORT ?? 3101)
   await app.listen(port)
 }
 

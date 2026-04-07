@@ -17,7 +17,7 @@ function normalizeBaseUrl(value: string | undefined) {
   ) {
     return process.env.NODE_ENV === "production"
       ? INTERNAL_API_URLS[0]
-      : "http://localhost:3001"
+      : "http://localhost:3101"
   }
 
   return value
@@ -31,7 +31,7 @@ const UPSTREAM_BASE_URLS =
       ].filter((value): value is string => Boolean(value))
     : [
         normalizeBaseUrl(process.env.ECOLMS_API_BASE_URL) ??
-          "http://localhost:3001",
+          "http://localhost:3101",
       ]
 
 async function proxy(

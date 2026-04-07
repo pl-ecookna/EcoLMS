@@ -12,10 +12,12 @@ from urllib.parse import urlparse
 import psycopg
 from psycopg.rows import dict_row
 
+from worker.prompts import prompt_bundle_for_stage
+
 
 @dataclass(slots=True)
 class WorkerConfig:
-    api_base_url: str = "http://localhost:3001"
+    api_base_url: str = "http://localhost:3101"
     transcription_service_url: str = "http://localhost:3002"
     postgres_url: str = "postgresql://postgres:password@localhost:5432/ecolms"
     redis_url: str = "redis://localhost:6379"
@@ -26,7 +28,11 @@ class WorkerConfig:
 INTERNAL_POSTGRES_URL = (
     "postgresql://postgres:vkqze4hgid6c3yny@ecolms-lmsdb-uloxp8:5432/postgres"
 )
+EXTERNAL_POSTGRES_URL = (
+    "postgresql://postgres:vkqze4hgid6c3yny@46.173.20.149:5434/postgres"
+)
 INTERNAL_REDIS_URL = "redis://default:0ttko0zmmp7klvsv@ecolms-lmsredis-czote9:6379"
+EXTERNAL_REDIS_URL = "redis://default:0ttko0zmmp7klvsv@46.173.20.149:6381"
 
 
 def normalize_service_url(value: str | None, *, default_prod: str, default_dev: str) -> str:
@@ -54,7 +60,7 @@ def load_config() -> WorkerConfig:
         api_base_url=normalize_service_url(
             os.getenv("API_BASE_URL"),
             default_prod="http://app-calculate-open-source-alarm-cob2f6:3001",
-            default_dev="http://localhost:3001",
+            default_dev="http://localhost:3101",
         ),
         transcription_service_url=normalize_service_url(
             os.getenv("TRANSCRIPTION_SERVICE_URL"),
@@ -64,12 +70,12 @@ def load_config() -> WorkerConfig:
         postgres_url=normalize_service_url(
             os.getenv("POSTGRES_URL"),
             default_prod=INTERNAL_POSTGRES_URL,
-            default_dev="postgresql://postgres:password@localhost:5432/ecolms",
+            default_dev=EXTERNAL_POSTGRES_URL,
         ),
         redis_url=normalize_service_url(
             os.getenv("REDIS_URL"),
             default_prod=INTERNAL_REDIS_URL,
-            default_dev="redis://localhost:6379",
+            default_dev=EXTERNAL_REDIS_URL,
         ),
         s3_bucket=os.getenv("S3_BUCKET", "ecolms"),
         job_queue_key=os.getenv("WORKER_JOB_QUEUE_KEY", "ecolms:processing-jobs"),
@@ -174,49 +180,79 @@ def make_stage_markdown(project_name: str, stage: str, topic: str) -> str:
     if stage == "source_compiled":
         return (
             f"# {project_name}\n\n"
-            "## Что уже известно\n"
-            f"- {topic}\n"
-            "- Совмещаем видео и документы в одном проекте.\n"
-            "- Итог хранится только в S3.\n\n"
-            "## Что удаляем\n"
-            "- контакты, если они не нужны для обучения;\n"
-            "- рекламный шум;\n"
-            "- повторы из вебинаров.\n"
+            "## Сводка по исходным материалам\n"
+            f"{topic}\n\n"
+            "## Что должно войти в структурированный источник\n"
+            "- технические характеристики и параметры;\n"
+            "- инструкции, алгоритмы и методики;\n"
+            "- требования безопасности;\n"
+            "- контроль качества и типовые ошибки;\n"
+            "- инструменты, материалы и термины.\n\n"
+            "## Что исключаем из учебной версии\n"
+            "- контакты, реквизиты и внешние ссылки;\n"
+            "- организационные объявления и приветствия;\n"
+            "- маркетинговые и юридические блоки.\n\n"
+            "## Комментарий\n"
+            "Черновик собран по правилам очистки исходников и готов к ручной проверке.\n"
         )
 
     if stage == "course_outline":
         return (
             "# План курса\n\n"
-            f"1. Введение в {topic}\n"
-            "2. Ключевые материалы\n"
-            "3. Практика и примеры\n"
-            "4. Типовые ошибки\n"
-            "5. Проверка понимания\n"
+            f"**Основа курса:** {topic}\n\n"
+            "## Разделы курса\n"
+            "1. Введение в продукт, систему или технологию\n"
+            "2. Ключевые технические сведения и параметры\n"
+            "3. Основные операции и порядок выполнения работ\n"
+            "4. Контроль качества и типовые ошибки\n"
+            "5. Безопасность и итоговая проверка знаний\n\n"
+            "## Ключевые навыки после обучения\n"
+            "- ориентироваться в исходных материалах;\n"
+            "- понимать последовательность работ;\n"
+            "- видеть требования к качеству и безопасности.\n"
         )
 
     if stage == "course_content":
         return (
             "# Обучающие материалы\n\n"
-            "## Раздел 1. Введение\n"
-            "Кратко объясняем, зачем нужен материал и кому он адресован.\n\n"
-            "## Раздел 2. Практика\n"
-            "Даём пошаговые инструкции без жаргона и лишних деталей.\n"
+            "## Цели обучения\n"
+            "- Сформировать прикладное понимание темы на основе утверждённого плана.\n"
+            "- Подготовить материал для практического использования в работе.\n\n"
+            "## Теоретическая часть\n"
+            f"{topic}\n\n"
+            "## Практическое применение\n"
+            "1. Выполнить действия в порядке, описанном в исходных материалах.\n"
+            "2. Проверить соблюдение технических требований и допусков.\n"
+            "3. Зафиксировать контрольные точки качества.\n\n"
+            "## Важные замечания\n"
+            "> Если данных из исходников недостаточно для полного раскрытия раздела, это нужно явно отметить при доработке материала.\n"
         )
 
     return (
         "# Тест\n\n"
-        "1. Какой шаг следует после source_compiled?\n"
-        "   - План курса\n"
-        "   - Список файлов\n"
-        "   - Архив проекта\n"
-        "2. Сколько вопросов должно быть в тесте?\n"
-        "   - 5\n"
-        "   - 10\n"
-        "   - 15\n"
+        "1. Какой принцип обязателен при создании учебного контента?\n"
+        "   - Использовать только данные из исходных материалов ✅\n"
+        "   - Добавлять сведения из внешних источников\n"
+        "   - Сокращать технические требования по усмотрению автора\n\n"
+        "2. Что должно быть отражено в хорошем учебном материале?\n"
+        "   - Только маркетинговые преимущества\n"
+        "   - Контроль качества, безопасность и порядок действий ✅\n"
+        "   - Только перечень файлов проекта\n"
     )
 
 
-def ensure_stage_artifact(conn: psycopg.Connection, job: dict[str, Any], markdown: str) -> None:
+def stage_prompt_metadata(stage: str) -> dict[str, Any]:
+    prompts = prompt_bundle_for_stage(stage)
+    return {
+        "promptKeys": [item.key for item in prompts],
+        "promptTitles": [item.title for item in prompts],
+        "promptTexts": [item.text for item in prompts],
+    }
+
+
+def ensure_stage_artifact(
+    conn: psycopg.Connection, job: dict[str, Any], markdown: str, metadata: dict[str, Any]
+) -> None:
     conn.execute(
         """
         update artifacts
@@ -227,7 +263,10 @@ def ensure_stage_artifact(conn: psycopg.Connection, job: dict[str, Any], markdow
         """,
         (
             markdown,
-            json.dumps({"stage": job["stage"], "markdown": markdown}, ensure_ascii=False),
+            json.dumps(
+                {"stage": job["stage"], "markdown": markdown, **metadata},
+                ensure_ascii=False,
+            ),
             job["project_id"],
             job["stage"],
         ),
@@ -240,7 +279,10 @@ def ensure_stage_artifact(conn: psycopg.Connection, job: dict[str, Any], markdow
         where project_id = %s and stage = %s and format = 'json'
         """,
         (
-            json.dumps({"stage": job["stage"], "markdown": markdown}, ensure_ascii=False),
+            json.dumps(
+                {"stage": job["stage"], "markdown": markdown, **metadata},
+                ensure_ascii=False,
+            ),
             job["project_id"],
             job["stage"],
         ),
@@ -291,7 +333,9 @@ def set_job_processing(conn: psycopg.Connection, job_id: str) -> None:
     )
 
 
-def set_job_done(conn: psycopg.Connection, job_id: str, stage: str) -> None:
+def set_job_done(
+    conn: psycopg.Connection, job_id: str, stage: str, metadata: dict[str, Any]
+) -> None:
     conn.execute(
         """
         update processing_jobs
@@ -306,6 +350,7 @@ def set_job_done(conn: psycopg.Connection, job_id: str, stage: str) -> None:
                     "status": "done",
                     "stage": stage,
                     "generatedAt": utc_now(),
+                    **metadata,
                 },
                 ensure_ascii=False,
             ),
@@ -363,12 +408,13 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
         markdown = make_stage_markdown(
             project["name"], job["stage"], project["source_summary"]
         )
+        prompt_metadata = stage_prompt_metadata(job["stage"])
 
         with conn.transaction():
             set_job_processing(conn, job["id"])
             append_project_log(conn, project["id"], f"Worker начал обработку job {job['stage']}.")
-            ensure_stage_artifact(conn, job, markdown)
-            set_job_done(conn, job["id"], job["stage"])
+            ensure_stage_artifact(conn, job, markdown, prompt_metadata)
+            set_job_done(conn, job["id"], job["stage"], prompt_metadata)
             conn.execute(
                 """
                 update projects

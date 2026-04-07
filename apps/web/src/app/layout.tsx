@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "EcoLMS",
+  title: "Конструктор обучающих курсов",
   description:
     "Внутренний AI-ассистент для подготовки обучающих курсов из видео и документов.",
 };
@@ -28,7 +28,9 @@ export default function RootLayout({
       lang="ru"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        <main className="flex-1">{children}</main>
+      </body>
     </html>
   );
 }

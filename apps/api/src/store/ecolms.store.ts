@@ -133,6 +133,19 @@ export interface ProjectDetailRecord extends ProjectRecord {
 const MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024 * 1024
 const MAX_FILES_PER_PROJECT = 5
 
+function promptKeysForStage(stage: StageId) {
+  switch (stage) {
+    case "source_compiled":
+      return ["analize_video", "analize_doc"]
+    case "course_outline":
+      return ["generate_plan"]
+    case "course_content":
+      return ["generate_materials"]
+    case "course_test":
+      return ["generate_test"]
+  }
+}
+
 function nowIso() {
   return new Date().toISOString()
 }
@@ -454,7 +467,15 @@ export class EcolmsStore {
         )
         returning *
       `,
-        [randomUUID(), id, project.currentStage, JSON.stringify({ stage: project.currentStage })]
+        [
+          randomUUID(),
+          id,
+          project.currentStage,
+          JSON.stringify({
+            stage: project.currentStage,
+            promptKeys: promptKeysForStage(project.currentStage),
+          }),
+        ]
       )
 
       await client.query(
@@ -780,7 +801,16 @@ export class EcolmsStore {
             $1, $2, $3, 'queued', $4::jsonb, null, null, null, null, now()
           )
         `,
-          [randomUUID(), projectId, nextStage, JSON.stringify({ stage: nextStage, trigger: "approval" })]
+          [
+            randomUUID(),
+            projectId,
+            nextStage,
+            JSON.stringify({
+              stage: nextStage,
+              trigger: "approval",
+              promptKeys: promptKeysForStage(nextStage),
+            }),
+          ]
         )
       } else {
         await client.query(
@@ -866,6 +896,22 @@ export class EcolmsStore {
         [projectId, JSON.stringify([`Повторный запуск job ${String(row.stage)}.`, ...(await this.getProjectLogs(projectId))].slice(0, 10))]
       )
     })
+
+    await this.db.query(
+      `
+      update processing_jobs
+      set payload_json = $2::jsonb
+      where id = $1
+      `,
+      [
+        jobId,
+        JSON.stringify({
+          stage: String(row.stage),
+          trigger: "retry",
+          promptKeys: promptKeysForStage(String(row.stage) as StageId),
+        }),
+      ]
+    )
 
     await this.queue.enqueueProcessingJob({
       jobId,
