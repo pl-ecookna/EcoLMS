@@ -672,9 +672,9 @@ export function EcolmsDashboard() {
 
   return (
     <>
-      <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(15,23,42,0.05),_transparent_28%),linear-gradient(180deg,_rgba(248,250,252,0.96)_0%,_rgba(255,255,255,1)_22%)]">
-        <div className="mx-auto flex min-h-screen w-full max-w-[1760px] flex-col gap-4 px-6 py-5">
-          <header className="flex items-end justify-between gap-4 border-b border-border/70 pb-4">
+      <div className="min-h-screen bg-[linear-gradient(180deg,_rgba(237,243,236,0.88)_0%,_rgba(247,247,241,0.9)_45%,_rgba(248,247,242,1)_100%)]">
+        <div className="mx-auto flex min-h-screen w-full max-w-[1760px] flex-col gap-5 px-6 py-6">
+          <header className="flex items-end justify-between gap-4 rounded-4xl border border-border/80 bg-card px-6 py-5 shadow-[0_10px_24px_rgba(20,55,28,0.08)]">
             <div className="flex flex-col gap-2">
               <div className="flex items-center gap-2 text-xs uppercase tracking-[0.22em] text-muted-foreground">
                 <SparklesIcon className="size-4" />
@@ -687,7 +687,13 @@ export function EcolmsDashboard() {
                 Операционный экран для запуска, проверки и выпуска материалов курса.
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 rounded-full bg-secondary/70 px-4 py-2">
+                <span className="size-2 rounded-full bg-primary" />
+                <span className="font-heading text-sm font-bold tracking-[0.06em] text-foreground">
+                  ECOOKNA GROUP
+                </span>
+              </div>
               <Button
                 variant="outline"
                 onClick={() => {
@@ -709,25 +715,25 @@ export function EcolmsDashboard() {
           </header>
 
           <section className="grid grid-cols-4 gap-3">
-            <Card size="sm">
+            <Card size="sm" className="border-border/80 bg-secondary/35">
               <CardHeader>
                 <CardDescription>Всего курсов</CardDescription>
                 <CardTitle className="text-3xl">{summary.total}</CardTitle>
               </CardHeader>
             </Card>
-            <Card size="sm">
+            <Card size="sm" className="border-border/80 bg-secondary/35">
               <CardHeader>
                 <CardDescription>Требуют внимания</CardDescription>
                 <CardTitle className="text-3xl">{summary.awaiting}</CardTitle>
               </CardHeader>
             </Card>
-            <Card size="sm">
+            <Card size="sm" className="border-border/80 bg-secondary/35">
               <CardHeader>
                 <CardDescription>В обработке</CardDescription>
                 <CardTitle className="text-3xl">{summary.processing}</CardTitle>
               </CardHeader>
             </Card>
-            <Card size="sm">
+            <Card size="sm" className="border-border/80 bg-secondary/35">
               <CardHeader>
                 <CardDescription>Готово</CardDescription>
                 <CardTitle className="text-3xl">{summary.completed}</CardTitle>
@@ -744,8 +750,8 @@ export function EcolmsDashboard() {
           ) : null}
 
           <section className="grid flex-1 grid-cols-[420px_minmax(0,1fr)] gap-4">
-            <Card className="overflow-hidden">
-              <CardHeader className="border-b">
+            <Card className="overflow-hidden rounded-4xl border-border/80 bg-card shadow-[0_10px_26px_rgba(20,55,28,0.06)]">
+              <CardHeader className="border-b bg-secondary/35">
                 <CardTitle>Курсы</CardTitle>
                 <CardDescription>
                   Список курсов и их текущий этап обработки.
@@ -772,7 +778,7 @@ export function EcolmsDashboard() {
                           key={project.id}
                           variant="ghost"
                           className={cn(
-                            "h-auto w-full justify-start rounded-none border-b px-4 py-3 text-left",
+                            "h-auto w-full justify-start rounded-none border-b border-border/60 px-4 py-3 text-left transition-colors hover:bg-secondary/35",
                             statusAccent(project.status),
                             project.id === selectedProject?.id && "bg-muted"
                           )}
@@ -860,7 +866,7 @@ export function EcolmsDashboard() {
               </CardContent>
             </Card>
 
-            <Card className="overflow-hidden">
+            <Card className="overflow-hidden rounded-4xl border-border/80 bg-card shadow-[0_10px_26px_rgba(20,55,28,0.06)]">
               {!selectedProject && !detailLoading ? (
                 <CardContent className="flex h-full min-h-[600px] items-center justify-center">
                   <div className="max-w-md space-y-2 text-center">
@@ -878,7 +884,7 @@ export function EcolmsDashboard() {
                 </CardContent>
               ) : selectedProject ? (
                 <>
-                  <CardHeader className="border-b">
+                  <CardHeader className="border-b bg-secondary/20">
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex min-w-0 flex-col gap-2">
                         <CardTitle className="truncate text-2xl">
@@ -906,7 +912,7 @@ export function EcolmsDashboard() {
                   ) : null}
 
                   <CardContent className="space-y-4 p-4">
-                    <Card size="sm">
+                    <Card size="sm" className="border-border/80 bg-secondary/28">
                       <CardHeader>
                         <CardTitle className="text-base">Путь по этапам</CardTitle>
                         <CardDescription>
@@ -942,7 +948,7 @@ export function EcolmsDashboard() {
                       </CardContent>
                     </Card>
 
-                    <Card size="sm">
+                    <Card size="sm" className="border-border/80 bg-secondary/28">
                       <CardHeader>
                         <CardTitle className="text-base">Главное действие</CardTitle>
                         <CardDescription>{primaryActionHint}</CardDescription>
@@ -994,7 +1000,7 @@ export function EcolmsDashboard() {
                       onValueChange={(value) => setActiveTab(value as WorkspaceTab)}
                       className="gap-0"
                     >
-                      <TabsList variant="line" className="border-b px-1">
+                      <TabsList variant="line" className="border-b bg-secondary/20 px-1">
                         <TabsTrigger value="overview">Обзор</TabsTrigger>
                         <TabsTrigger value="stages">Этапы</TabsTrigger>
                         <TabsTrigger value="journal">Журнал</TabsTrigger>
