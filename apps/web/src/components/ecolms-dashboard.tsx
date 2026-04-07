@@ -16,7 +16,7 @@ import {
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
 import {
   Card,
   CardContent,
@@ -912,14 +912,12 @@ export function EcolmsDashboard() {
                               </CardDescription>
                             </div>
                             <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button
-                                  variant="outline"
-                                  disabled={detailLoading || mutating || !currentStageArtifact}
-                                >
-                                  <MoreHorizontalIcon data-icon="inline-start" />
-                                  Действия
-                                </Button>
+                              <DropdownMenuTrigger
+                                disabled={detailLoading || mutating || !currentStageArtifact}
+                                className={buttonVariants({ variant: "outline" })}
+                              >
+                                <MoreHorizontalIcon data-icon="inline-start" />
+                                Действия
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
                                 <DropdownMenuItem
