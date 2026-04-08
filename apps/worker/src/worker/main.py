@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib import error as urlerror
 from urllib import request as urlrequest
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 
 import psycopg
 from psycopg.rows import dict_row
@@ -184,8 +184,8 @@ def redis_url_parts(redis_url: str) -> tuple[str, int, str | None, str | None, i
     parsed = urlparse(redis_url)
     host = parsed.hostname or "localhost"
     port = parsed.port or 6379
-    username = urlparse.unquote(parsed.username) if parsed.username else None
-    password = urlparse.unquote(parsed.password) if parsed.password else None
+    username = unquote(parsed.username) if parsed.username else None
+    password = unquote(parsed.password) if parsed.password else None
     db = 0
     if parsed.path and parsed.path != "/":
         try:
