@@ -968,6 +968,10 @@ export function EcolmsDashboard() {
     sourceDone && sourceTextReady && isStageDone(selectedProject, "course_outline")
   const canGenerateTest =
     sourceDone && sourceTextReady && isStageDone(selectedProject, "course_content")
+  const stageInServerProcessing = (stage: GenerationStage) =>
+    selectedProject?.status === "processing" && selectedProject.currentStage === stage
+  const selectedStageIsProcessing =
+    stageInServerProcessing(selectedStage) || (generatingStage === selectedStage && mutating)
 
   const generationLabelByStage: Record<GenerationStage, string> = {
     source_compiled: "Распознать материалы",
@@ -994,6 +998,9 @@ export function EcolmsDashboard() {
   ]
 
   function isGenerateDisabled(stage: GenerationStage) {
+    if (stageInServerProcessing(stage)) {
+      return true
+    }
     if (stage === "source_compiled") {
       return !canGenerateSource || mutating
     }
@@ -1007,6 +1014,9 @@ export function EcolmsDashboard() {
   }
 
   function getGenerateBlockedReason(stage: GenerationStage) {
+    if (stageInServerProcessing(stage)) {
+      return "Этап сейчас в генерации. Дождитесь завершения."
+    }
     if (mutating) {
       return "Дождитесь завершения текущей операции."
     }
@@ -1502,7 +1512,7 @@ export function EcolmsDashboard() {
                               </div>
                               <div className="space-y-1.5">
                                 <h3 className="text-base font-semibold">Результат пока не создан</h3>
-                                {generatingStage === selectedStage && mutating ? null : (
+                                {selectedStageIsProcessing ? null : (
                                   <p className="text-sm text-muted-foreground">
                                     Запустите генерацию для этапа «{stageLabels[selectedStage]}», чтобы
                                     увидеть текст в этом окне.
@@ -1510,7 +1520,7 @@ export function EcolmsDashboard() {
                                 )}
                               </div>
                               <div className="space-y-1.5">
-                                {generatingStage === selectedStage && mutating ? (
+                                {selectedStageIsProcessing ? (
                                   <div className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm text-muted-foreground">
                                     <Loader2Icon className="size-4 animate-spin" />
                                     Идёт генерация...
