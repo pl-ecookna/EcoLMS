@@ -6,7 +6,7 @@ export const stageOrder = [
 ] as const
 
 export const stageLabels: Record<StageId, string> = {
-  source_compiled: "Структурированный источник",
+  source_compiled: "Источник",
   course_outline: "План курса",
   course_content: "Обучающие материалы",
   course_test: "Тест",

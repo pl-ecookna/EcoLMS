@@ -844,7 +844,7 @@ export function EcolmsDashboard() {
       setSourcePreviewError(
         error instanceof Error
           ? error.message
-          : "Не удалось загрузить структурированный источник."
+          : "Не удалось загрузить источник."
       )
     } finally {
       setSourcePreviewLoading(false)
@@ -1860,7 +1860,7 @@ export function EcolmsDashboard() {
       <Sheet open={sourcePreviewOpen} onOpenChange={setSourcePreviewOpen}>
         <SheetContent className="flex h-full w-full flex-col gap-0 sm:max-w-[980px]">
           <SheetHeader className="border-b">
-            <SheetTitle>Структурированный источник</SheetTitle>
+            <SheetTitle>Источник</SheetTitle>
             <SheetDescription>
               Курс: {sourcePreviewProjectName || "Без названия"}
             </SheetDescription>
