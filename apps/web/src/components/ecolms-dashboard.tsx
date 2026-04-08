@@ -1482,10 +1482,10 @@ export function EcolmsDashboard() {
                           <Textarea
                             value={editorValue}
                             onChange={(event) => setEditorValue(event.target.value)}
-                            className="min-h-[620px] font-mono text-sm"
+                            className="h-[620px] resize-none overflow-y-auto font-mono text-sm"
                           />
                         ) : editorValue.trim() ? (
-                          <div className="min-h-[620px] border border-border bg-muted/20 p-4">
+                          <div className="h-[620px] overflow-y-auto border border-border bg-muted/20 p-4">
                             <MarkdownContent value={editorValue} />
                           </div>
                         ) : (
