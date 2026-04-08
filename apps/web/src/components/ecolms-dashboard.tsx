@@ -164,6 +164,28 @@ function projectStatusBadgeVariant(
   }
 }
 
+function displayProjectStatus(
+  project: Pick<ProjectRecord, "status" | "stages">
+): ProjectStatus {
+  if (project.status === "failed") {
+    return "failed"
+  }
+
+  const hasProcessingStage = project.stages.some((stage) => stage.status === "processing")
+  const hasDoneStage = project.stages.some((stage) => stage.status === "done")
+  const allStagesDone =
+    project.stages.length > 0 && project.stages.every((stage) => stage.status === "done")
+
+  if (allStagesDone) {
+    return "completed"
+  }
+  if (hasProcessingStage || hasDoneStage) {
+    return "processing"
+  }
+
+  return project.status
+}
+
 function fileKind(file: File) {
   if (file.type.startsWith("video/")) {
     return "video"
@@ -1129,12 +1151,14 @@ export function EcolmsDashboard() {
                       ))
                     ) : projects.length ? (
                       <div className="space-y-3 p-3">
-                        {projects.map((project) => (
+                        {projects.map((project) => {
+                          const statusForBadge = displayProjectStatus(project)
+                          return (
                           <button
                             key={project.id}
                             type="button"
                             className={cn(
-                              "w-full rounded-lg border p-3 text-left transition-colors hover:bg-muted/35",
+                              "w-full rounded-lg border p-2.5 text-left transition-colors hover:bg-muted/35",
                               project.id === selectedProject?.id
                                 ? "border-primary/35 bg-muted/30"
                                 : "border-border/70 bg-card"
@@ -1142,12 +1166,9 @@ export function EcolmsDashboard() {
                             onClick={() => handleSelectProject(project.id)}
                           >
                             <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0 space-y-1">
+                              <div className="min-w-0">
                                 <div className="truncate text-base font-semibold">
                                   {project.name}
-                                </div>
-                                <div className="line-clamp-2 text-sm text-muted-foreground">
-                                  {project.sourceSummary || "Описание появится после обработки."}
                                 </div>
                               </div>
                               <DropdownMenu>
@@ -1233,15 +1254,16 @@ export function EcolmsDashboard() {
                               </DropdownMenu>
                             </div>
                             <div className="mt-2 flex items-center justify-end gap-2">
-                              <Badge variant={projectStatusBadgeVariant(project.status)}>
-                                {projectStatusLabels[project.status]}
+                              <Badge variant={projectStatusBadgeVariant(statusForBadge)}>
+                                {projectStatusLabels[statusForBadge]}
                               </Badge>
                             </div>
-                            <div className="mt-1 text-xs text-muted-foreground">
+                            <div className="mt-0.5 text-xs text-muted-foreground">
                               {formatDateLabel(project.updatedAt)}
                             </div>
                           </button>
-                        ))}
+                          )
+                        })}
                       </div>
                     ) : (
                       <div className="px-6 py-12 text-center text-sm text-muted-foreground">
