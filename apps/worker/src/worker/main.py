@@ -249,23 +249,7 @@ def redis_command(redis_url: str, *parts: str, timeout: float = 6.0) -> Any:
 
 def make_stage_markdown(project_name: str, stage: str, topic: str) -> str:
     if stage == "source_compiled":
-        return (
-            f"# {project_name}\n\n"
-            "## Сводка по исходным материалам\n"
-            f"{topic}\n\n"
-            "## Что должно войти в структурированный источник\n"
-            "- технические характеристики и параметры;\n"
-            "- инструкции, алгоритмы и методики;\n"
-            "- требования безопасности;\n"
-            "- контроль качества и типовые ошибки;\n"
-            "- инструменты, материалы и термины.\n\n"
-            "## Что исключаем из учебной версии\n"
-            "- контакты, реквизиты и внешние ссылки;\n"
-            "- организационные объявления и приветствия;\n"
-            "- маркетинговые и юридические блоки.\n\n"
-            "## Комментарий\n"
-            "Черновик собран по правилам очистки исходников и готов к ручной проверке.\n"
-        )
+        return f"# {project_name}\n\n{topic}\n"
 
     if stage == "course_outline":
         return (
@@ -310,6 +294,13 @@ def make_stage_markdown(project_name: str, stage: str, topic: str) -> str:
         "   - Контроль качества, безопасность и порядок действий ✅\n"
         "   - Только перечень файлов проекта\n"
     )
+
+
+def make_source_compiled_markdown(project_name: str, sections: list[str]) -> str:
+    clean_sections = [item.strip() for item in sections if item and item.strip()]
+    if not clean_sections:
+        return f"# {project_name}\n\nИсточник пуст. Добавьте файлы и запустите распознавание.\n"
+    return f"# {project_name}\n\n" + "\n\n---\n\n".join(clean_sections)
 
 
 def extract_summary(text: str, limit: int = 1500) -> str:
@@ -1049,12 +1040,12 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
         llm_documents: list[dict[str, Any]] = []
         llm_stage_input_stages: list[str] = []
         source_file: dict[str, Any] | None = None
+        source_compiled_sections: list[str] = []
         topic_for_markdown = project["source_summary"]
         if job["stage"] == "source_compiled":
             source_files = load_source_files(conn, project["id"])
             source_file = pick_video_source_file(source_files)
             document_source_files = pick_document_source_files(source_files)
-            topic_fragments: list[str] = []
             if source_file is not None:
                 transcription_data = call_transcription_service(config, source_file)
                 transcript_text = str(transcription_data.get("text") or "").strip()
@@ -1064,11 +1055,21 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
                     prompt_key="analize_video",
                     source_type="транскрипт видео",
                 )
+                video_source_text = str(llm_data.get("transcript") or "").strip() or transcript_text
+                if video_source_text:
+                    source_compiled_sections.append(
+                        "\n".join(
+                            [
+                                f"## Видео: {source_file.get('original_name') or source_file['id']}",
+                                video_source_text,
+                            ]
+                        )
+                    )
                 video_summary = str(llm_data.get("summary") or "").strip() or extract_summary(
-                    transcript_text
+                    video_source_text
                 )
                 if video_summary:
-                    topic_fragments.append(video_summary)
+                    topic_for_markdown = video_summary
             if document_source_files:
                 merged_document_parts: list[str] = []
                 for document_source in document_source_files:
@@ -1080,6 +1081,14 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
                         document_text = document_text.strip()
                         if not document_text:
                             continue
+                        source_compiled_sections.append(
+                            "\n".join(
+                                [
+                                    f"## Документ: {document_source.get('original_name') or document_source['id']}",
+                                    document_text,
+                                ]
+                            )
+                        )
                         merged_document_parts.append(
                             "\n\n".join(
                                 [
@@ -1126,9 +1135,11 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
                     )
                     document_summary = str(llm_document_data.get("summary") or "").strip()
                     if document_summary:
-                        topic_fragments.append(document_summary)
-            if topic_fragments:
-                topic_for_markdown = "\n\n".join(topic_fragments)
+                        topic_for_markdown = (
+                            f"{topic_for_markdown}\n\n{document_summary}"
+                            if topic_for_markdown.strip()
+                            else document_summary
+                        )
         else:
             source_for_stage, llm_stage_input_stages = build_stage_generation_input(
                 conn,
@@ -1149,6 +1160,8 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
                 )
 
         markdown = str(llm_stage_data.get("markdown") or "").strip() if llm_stage_data else ""
+        if job["stage"] == "source_compiled":
+            markdown = make_source_compiled_markdown(project["name"], source_compiled_sections)
         if not markdown:
             markdown = make_stage_markdown(project["name"], job["stage"], topic_for_markdown)
         payload = job.get("payload_json") or {}
