@@ -694,7 +694,7 @@ def load_artifact_markdown(conn: psycopg.Connection, project_id: str, stage: str
     ).fetchone()
     if row is None:
         return ""
-    content = row[0]
+    content = row.get("content_md")
     if not isinstance(content, str):
         return ""
     return content.strip()
