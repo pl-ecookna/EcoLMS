@@ -640,8 +640,10 @@ def recover_missing_job(
     if not job_id or not project_id or not stage:
         return None
 
-    if stage not in PROMPTS:
+    if stage not in STAGE_ORDER:
         return None
+
+    prompt_keys = [prompt.key for prompt in prompt_bundle_for_stage(stage)]
 
     conn.execute(
         """
@@ -660,7 +662,7 @@ def recover_missing_job(
                 {
                     "stage": stage,
                     "trigger": trigger,
-                    "promptKeys": prompt_bundle_for_stage(stage),
+                    "promptKeys": prompt_keys,
                     "autoGenerateAll": trigger == "auto",
                     "nextStage": None,
                 },
