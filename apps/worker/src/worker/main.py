@@ -4,6 +4,7 @@ import json
 import os
 import socket
 import time
+from io import BytesIO
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -11,8 +12,13 @@ from urllib import error as urlerror
 from urllib import request as urlrequest
 from urllib.parse import urlparse, unquote
 
+import boto3
 import psycopg
+from docx import Document
+from pptx import Presentation
+from pypdf import PdfReader
 from psycopg.rows import dict_row
+from striprtf.striprtf import rtf_to_text
 
 from worker.prompts import prompt_bundle_for_stage, PROMPTS
 
@@ -400,14 +406,26 @@ def openrouter_chat_completion(
     return content, model_name
 
 
-def analyze_source_with_llm(config: WorkerConfig, transcript_text: str) -> dict[str, Any]:
-    prompt = PROMPTS["analize_video"].text
-    if not transcript_text.strip():
-        raise RuntimeError("Невозможно вызвать LLM: транскрипт пуст.")
+def analyze_source_with_llm(
+    config: WorkerConfig,
+    source_text: str,
+    *,
+    prompt_key: str = "analize_video",
+    source_type: str = "видео",
+) -> dict[str, Any]:
+    prompt_definition = PROMPTS.get(prompt_key)
+    if prompt_definition is None:
+        raise RuntimeError(f"Неизвестный prompt key: {prompt_key}")
+    prompt = prompt_definition.text
+    if not source_text.strip():
+        raise RuntimeError("Невозможно вызвать LLM: исходный текст пуст.")
 
     user_payload = {
-        "task": "Проанализируй транскрипт видео и верни только JSON с полями summary и transcript.",
-        "transcript": transcript_text,
+        "task": (
+            f"Проанализируй {source_type} и верни только JSON с полями summary и transcript. "
+            "Поле transcript должно содержать очищенный исходный текст без выдуманных данных."
+        ),
+        "sourceText": source_text,
     }
     messages = [
         {"role": "system", "content": prompt},
@@ -449,11 +467,16 @@ def analyze_source_with_llm(config: WorkerConfig, transcript_text: str) -> dict[
 
             parsed = parse_json_from_text(content)
             summary = str(parsed.get("summary") or "").strip()
-            transcript = str(parsed.get("transcript") or "").strip()
+            transcript = str(
+                parsed.get("transcript")
+                or parsed.get("sourceText")
+                or parsed.get("text")
+                or ""
+            ).strip()
             if not summary:
-                summary = extract_summary(transcript_text)
+                summary = extract_summary(source_text)
             if not transcript:
-                transcript = transcript_text
+                transcript = source_text
             return {
                 "summary": summary,
                 "transcript": transcript,
@@ -572,6 +595,99 @@ def pick_video_source_file(files: list[dict[str, Any]]) -> dict[str, Any] | None
         if mime_type.startswith("video/") or kind == "video":
             return source_file
     return None
+
+
+def file_extension(source_file: dict[str, Any]) -> str:
+    name = str(source_file.get("original_name") or "").strip().lower()
+    if "." not in name:
+        return ""
+    return name.rsplit(".", 1)[-1]
+
+
+def is_document_source_file(source_file: dict[str, Any]) -> bool:
+    mime_type = str(source_file.get("mime_type") or "").lower()
+    kind = str(source_file.get("kind") or "").lower()
+    ext = file_extension(source_file)
+    if mime_type.startswith("video/") or kind == "video":
+        return False
+    if kind in {"document", "pdf", "presentation", "text"}:
+        return True
+    if mime_type.startswith("text/"):
+        return True
+    if mime_type in {
+        "application/pdf",
+        "application/rtf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.ms-powerpoint",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    }:
+        return True
+    return ext in {"pdf", "doc", "docx", "ppt", "pptx", "rtf", "txt", "md"}
+
+
+def pick_document_source_files(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [source_file for source_file in files if is_document_source_file(source_file)]
+
+
+def s3_client(config: WorkerConfig) -> Any:
+    return boto3.client(
+        "s3",
+        endpoint_url=config.s3_endpoint,
+        aws_access_key_id=config.s3_access_key_id,
+        aws_secret_access_key=config.s3_secret_access_key,
+        region_name=config.s3_region,
+    )
+
+
+def download_s3_object_bytes(config: WorkerConfig, storage_key: str) -> bytes:
+    response = s3_client(config).get_object(Bucket=config.s3_bucket, Key=storage_key)
+    body = response.get("Body")
+    if body is None:
+        raise RuntimeError("S3 вернул пустой body для source file.")
+    content = body.read()
+    if not isinstance(content, (bytes, bytearray)):
+        raise RuntimeError("S3 вернул невалидный body для source file.")
+    return bytes(content)
+
+
+def extract_document_text(source_file: dict[str, Any], file_bytes: bytes) -> str:
+    mime_type = str(source_file.get("mime_type") or "").lower()
+    ext = file_extension(source_file)
+    if mime_type == "application/pdf" or ext == "pdf":
+        reader = PdfReader(BytesIO(file_bytes))
+        pages = [page.extract_text() or "" for page in reader.pages]
+        return "\n\n".join(item.strip() for item in pages if item.strip())
+    if (
+        mime_type
+        == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        or ext == "docx"
+    ):
+        document = Document(BytesIO(file_bytes))
+        paragraphs = [paragraph.text.strip() for paragraph in document.paragraphs]
+        return "\n".join(item for item in paragraphs if item)
+    if (
+        mime_type
+        == "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        or ext == "pptx"
+        or mime_type == "application/vnd.ms-powerpoint"
+        or ext == "ppt"
+    ):
+        presentation = Presentation(BytesIO(file_bytes))
+        slides_text: list[str] = []
+        for index, slide in enumerate(presentation.slides, start=1):
+            fragments: list[str] = []
+            for shape in slide.shapes:
+                text = str(getattr(shape, "text", "") or "").strip()
+                if text:
+                    fragments.append(text)
+            if fragments:
+                slides_text.append(f"Слайд {index}:\n" + "\n".join(fragments))
+        return "\n\n".join(slides_text)
+    if mime_type == "application/rtf" or ext == "rtf":
+        decoded = file_bytes.decode("utf-8", errors="ignore")
+        return rtf_to_text(decoded).strip()
+    return file_bytes.decode("utf-8", errors="ignore").strip()
 
 
 def call_transcription_service(
@@ -796,18 +912,88 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
         project = load_project(conn, job["project_id"])
         transcription_data: dict[str, Any] | None = None
         llm_data: dict[str, Any] | None = None
+        llm_documents: list[dict[str, Any]] = []
         source_file: dict[str, Any] | None = None
         topic_for_markdown = project["source_summary"]
         if job["stage"] == "source_compiled":
             source_files = load_source_files(conn, project["id"])
             source_file = pick_video_source_file(source_files)
+            document_source_files = pick_document_source_files(source_files)
+            topic_fragments: list[str] = []
             if source_file is not None:
                 transcription_data = call_transcription_service(config, source_file)
                 transcript_text = str(transcription_data.get("text") or "").strip()
-                llm_data = analyze_source_with_llm(config, transcript_text)
-                topic_for_markdown = str(llm_data.get("summary") or "").strip() or extract_summary(
+                llm_data = analyze_source_with_llm(
+                    config,
+                    transcript_text,
+                    prompt_key="analize_video",
+                    source_type="транскрипт видео",
+                )
+                video_summary = str(llm_data.get("summary") or "").strip() or extract_summary(
                     transcript_text
                 )
+                if video_summary:
+                    topic_fragments.append(video_summary)
+            if document_source_files:
+                merged_document_parts: list[str] = []
+                for document_source in document_source_files:
+                    try:
+                        document_bytes = download_s3_object_bytes(
+                            config, str(document_source["storage_key"])
+                        )
+                        document_text = extract_document_text(document_source, document_bytes)
+                        document_text = document_text.strip()
+                        if not document_text:
+                            continue
+                        merged_document_parts.append(
+                            "\n\n".join(
+                                [
+                                    f"Файл: {document_source.get('original_name') or document_source['id']}",
+                                    document_text[:50000],
+                                ]
+                            )
+                        )
+                    except Exception as exc:
+                        llm_documents.append(
+                            {
+                                "fileId": document_source["id"],
+                                "sourceOriginalName": document_source.get("original_name"),
+                                "error": str(exc),
+                            }
+                        )
+                if merged_document_parts:
+                    merged_document_text = "\n\n---\n\n".join(merged_document_parts)[:180000]
+                    llm_document_data = analyze_source_with_llm(
+                        config,
+                        merged_document_text,
+                        prompt_key="analize_doc",
+                        source_type="структурированные документы",
+                    )
+                    llm_documents.append(
+                        {
+                            "provider": llm_document_data.get("provider"),
+                            "model": llm_document_data.get("model"),
+                            "attempts": llm_document_data.get("attempts"),
+                            "summaryLength": len(str(llm_document_data.get("summary") or "")),
+                            "sourceTextLength": len(
+                                str(llm_document_data.get("transcript") or "")
+                            ),
+                            "files": [
+                                {
+                                    "fileId": item["id"],
+                                    "sourceStorageKey": item.get("storage_key"),
+                                    "sourceOriginalName": item.get("original_name"),
+                                    "sourceMimeType": item.get("mime_type"),
+                                }
+                                for item in document_source_files
+                            ],
+                        }
+                    )
+                    document_summary = str(llm_document_data.get("summary") or "").strip()
+                    if document_summary:
+                        topic_fragments.append(document_summary)
+            if topic_fragments:
+                topic_for_markdown = "\n\n".join(topic_fragments)
 
         markdown = make_stage_markdown(project["name"], job["stage"], topic_for_markdown)
         payload = job.get("payload_json") or {}
@@ -832,8 +1018,10 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
                 "model": llm_data.get("model"),
                 "attempts": llm_data.get("attempts"),
                 "summaryLength": len(str(llm_data.get("summary") or "")),
-                "transcriptLength": len(str(llm_data.get("transcript") or "")),
+                "sourceTextLength": len(str(llm_data.get("transcript") or "")),
             }
+        if llm_documents:
+            stage_metadata["llmDocuments"] = llm_documents
         auto_generate_all = bool(payload.get("autoGenerateAll"))
         queued_next_stage = payload.get("nextStage")
         if queued_next_stage is not None and not isinstance(queued_next_stage, str):
