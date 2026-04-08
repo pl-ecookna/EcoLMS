@@ -13,9 +13,9 @@ import {
 const logger = new Logger("PostgresService")
 
 const INTERNAL_POSTGRES_URL =
-  "postgresql://postgres:vkqze4hgid6c3yny@ecolms-lmsdb-uloxp8:5432/postgres"
+  "postgresql://postgres:postgres@postgres:5432/ecolms"
 const EXTERNAL_POSTGRES_URL =
-  "postgresql://postgres:vkqze4hgid6c3yny@46.173.20.149:5434/postgres"
+  "postgresql://postgres:postgres@localhost:5434/ecolms"
 
 function defaultPostgresUrl() {
   return process.env.NODE_ENV === "production"

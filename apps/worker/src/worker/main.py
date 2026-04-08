@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 import psycopg
 from psycopg.rows import dict_row
 
-from worker.prompts import prompt_bundle_for_stage
+from worker.prompts import prompt_bundle_for_stage, PROMPTS
 
 
 @dataclass(slots=True)
@@ -28,17 +28,24 @@ class WorkerConfig:
     s3_region: str = "ru-1"
     s3_access_key_id: str = ""
     s3_secret_access_key: str = ""
+    openai_api_key: str = ""
+    openrouter_api_key: str = ""
+    llm_primary_provider: str = "openai"
+    openai_model: str = "gpt-4.1-mini"
+    openrouter_model: str = "openai/gpt-4.1-mini"
+    openrouter_base_url: str = "https://openrouter.ai/api/v1/chat/completions"
+    llm_timeout_seconds: float = 120.0
     job_queue_key: str = "ecolms:processing-jobs"
 
 
 INTERNAL_POSTGRES_URL = (
-    "postgresql://postgres:vkqze4hgid6c3yny@ecolms-lmsdb-uloxp8:5432/postgres"
+    "postgresql://postgres:postgres@postgres:5432/ecolms"
 )
 EXTERNAL_POSTGRES_URL = (
-    "postgresql://postgres:vkqze4hgid6c3yny@46.173.20.149:5434/postgres"
+    "postgresql://postgres:postgres@localhost:5434/ecolms"
 )
-INTERNAL_REDIS_URL = "redis://default:0ttko0zmmp7klvsv@ecolms-lmsredis-czote9:6379"
-EXTERNAL_REDIS_URL = "redis://default:0ttko0zmmp7klvsv@46.173.20.149:6381"
+INTERNAL_REDIS_URL = "redis://redis:6379"
+EXTERNAL_REDIS_URL = "redis://localhost:6381"
 
 
 def normalize_service_url(value: str | None, *, default_prod: str, default_dev: str) -> str:
@@ -88,6 +95,15 @@ def load_config() -> WorkerConfig:
         s3_region=os.getenv("S3_REGION", "ru-1"),
         s3_access_key_id=os.getenv("S3_ACCESS_KEY_ID", ""),
         s3_secret_access_key=os.getenv("S3_SECRET_ACCESS_KEY", ""),
+        openai_api_key=os.getenv("OPENAI_API_KEY", ""),
+        openrouter_api_key=os.getenv("OPENROUTER_API_KEY", ""),
+        llm_primary_provider=os.getenv("LLM_PRIMARY_PROVIDER", "openai").strip().lower(),
+        openai_model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+        openrouter_model=os.getenv("OPENROUTER_MODEL", "openai/gpt-4.1-mini"),
+        openrouter_base_url=os.getenv(
+            "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1/chat/completions"
+        ),
+        llm_timeout_seconds=float(os.getenv("LLM_TIMEOUT_SECONDS", "120")),
         job_queue_key=os.getenv("WORKER_JOB_QUEUE_KEY", "ecolms:processing-jobs"),
     )
 
@@ -258,6 +274,161 @@ def extract_summary(text: str, limit: int = 1500) -> str:
     if len(compact) <= limit:
         return compact
     return f"{compact[:limit].rstrip()}..."
+
+
+def parse_json_from_text(value: str) -> dict[str, Any]:
+    raw = value.strip()
+    if not raw:
+        raise RuntimeError("Пустой ответ LLM.")
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise RuntimeError("LLM вернул невалидный JSON.")
+        parsed = json.loads(raw[start : end + 1])
+    if not isinstance(parsed, dict):
+        raise RuntimeError("LLM вернул невалидную JSON-структуру.")
+    return parsed
+
+
+def openai_chat_completion(
+    api_key: str, model: str, messages: list[dict[str, str]], timeout_seconds: float
+) -> tuple[str, str]:
+    request_payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"},
+    }
+    req = urlrequest.Request(
+        "https://api.openai.com/v1/chat/completions",
+        method="POST",
+        data=json.dumps(request_payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json; charset=utf-8",
+        },
+    )
+    with urlrequest.urlopen(req, timeout=timeout_seconds) as response:
+        body = json.loads(response.read().decode("utf-8"))
+    content = (
+        body.get("choices", [{}])[0]
+        .get("message", {})
+        .get("content", "")
+    )
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError("OpenAI вернул пустой ответ.")
+    model_name = str(body.get("model") or model)
+    return content, model_name
+
+
+def openrouter_chat_completion(
+    api_key: str,
+    base_url: str,
+    model: str,
+    messages: list[dict[str, str]],
+    timeout_seconds: float,
+) -> tuple[str, str]:
+    request_payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"},
+    }
+    req = urlrequest.Request(
+        base_url,
+        method="POST",
+        data=json.dumps(request_payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json; charset=utf-8",
+            "HTTP-Referer": "https://ecolms.local",
+            "X-Title": "EcoLMS Worker",
+        },
+    )
+    with urlrequest.urlopen(req, timeout=timeout_seconds) as response:
+        body = json.loads(response.read().decode("utf-8"))
+    content = (
+        body.get("choices", [{}])[0]
+        .get("message", {})
+        .get("content", "")
+    )
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError("OpenRouter вернул пустой ответ.")
+    model_name = str(body.get("model") or model)
+    return content, model_name
+
+
+def analyze_source_with_llm(config: WorkerConfig, transcript_text: str) -> dict[str, Any]:
+    prompt = PROMPTS["analize_video"].text
+    if not transcript_text.strip():
+        raise RuntimeError("Невозможно вызвать LLM: транскрипт пуст.")
+
+    user_payload = {
+        "task": "Проанализируй транскрипт видео и верни только JSON с полями summary и transcript.",
+        "transcript": transcript_text,
+    }
+    messages = [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+    ]
+
+    available_providers: list[str] = []
+    if config.openai_api_key.strip():
+        available_providers.append("openai")
+    if config.openrouter_api_key.strip():
+        available_providers.append("openrouter")
+    if not available_providers:
+        raise RuntimeError("OPENAI_API_KEY или OPENROUTER_API_KEY не заданы.")
+
+    primary = config.llm_primary_provider
+    if primary not in ("openai", "openrouter"):
+        primary = "openai"
+    ordered = [primary, "openrouter" if primary == "openai" else "openai"]
+    ordered = [provider for provider in ordered if provider in available_providers]
+
+    attempts: list[dict[str, Any]] = []
+    for provider in ordered:
+        try:
+            if provider == "openai":
+                content, model_name = openai_chat_completion(
+                    config.openai_api_key,
+                    config.openai_model,
+                    messages,
+                    config.llm_timeout_seconds,
+                )
+            else:
+                content, model_name = openrouter_chat_completion(
+                    config.openrouter_api_key,
+                    config.openrouter_base_url,
+                    config.openrouter_model,
+                    messages,
+                    config.llm_timeout_seconds,
+                )
+
+            parsed = parse_json_from_text(content)
+            summary = str(parsed.get("summary") or "").strip()
+            transcript = str(parsed.get("transcript") or "").strip()
+            if not summary:
+                summary = extract_summary(transcript_text)
+            if not transcript:
+                transcript = transcript_text
+            return {
+                "summary": summary,
+                "transcript": transcript,
+                "provider": provider,
+                "model": model_name,
+                "attempts": attempts + [{"provider": provider, "ok": True}],
+            }
+        except Exception as exc:
+            attempts.append({"provider": provider, "ok": False, "error": str(exc)})
+
+    details = "; ".join(
+        f"{item['provider']}: {item['error']}" for item in attempts if not item["ok"]
+    )
+    raise RuntimeError(f"Все LLM-провайдеры завершились ошибкой: {details}")
 
 
 def stage_prompt_metadata(stage: str) -> dict[str, Any]:
@@ -518,6 +689,7 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
 
         project = load_project(conn, job["project_id"])
         transcription_data: dict[str, Any] | None = None
+        llm_data: dict[str, Any] | None = None
         source_file: dict[str, Any] | None = None
         topic_for_markdown = project["source_summary"]
         if job["stage"] == "source_compiled":
@@ -526,7 +698,10 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
             if source_file is not None:
                 transcription_data = call_transcription_service(config, source_file)
                 transcript_text = str(transcription_data.get("text") or "").strip()
-                topic_for_markdown = extract_summary(transcript_text)
+                llm_data = analyze_source_with_llm(config, transcript_text)
+                topic_for_markdown = str(llm_data.get("summary") or "").strip() or extract_summary(
+                    transcript_text
+                )
 
         markdown = make_stage_markdown(project["name"], job["stage"], topic_for_markdown)
         payload = job.get("payload_json") or {}
@@ -544,6 +719,14 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
                 "duration": transcription_data.get("duration"),
                 "textLength": len(str(transcription_data.get("text") or "")),
                 "segmentsCount": len(transcription_data.get("segments") or []),
+            }
+        if llm_data is not None:
+            stage_metadata["llm"] = {
+                "provider": llm_data.get("provider"),
+                "model": llm_data.get("model"),
+                "attempts": llm_data.get("attempts"),
+                "summaryLength": len(str(llm_data.get("summary") or "")),
+                "transcriptLength": len(str(llm_data.get("transcript") or "")),
             }
         auto_generate_all = bool(payload.get("autoGenerateAll"))
         queued_next_stage = payload.get("nextStage")

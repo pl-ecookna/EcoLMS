@@ -10,9 +10,9 @@ export type ProcessingJobMessage = {
 
 const JOB_QUEUE_KEY = "ecolms:processing-jobs"
 const INTERNAL_REDIS_URL =
-  "redis://default:0ttko0zmmp7klvsv@ecolms-lmsredis-czote9:6379"
+  "redis://redis:6379"
 const EXTERNAL_REDIS_URL =
-  "redis://default:0ttko0zmmp7klvsv@46.173.20.149:6381"
+  "redis://localhost:6381"
 
 function defaultRedisUrl() {
   return process.env.NODE_ENV === "production"

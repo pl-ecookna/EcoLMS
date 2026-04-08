@@ -47,6 +47,11 @@ services:
       S3_SECRET_ACCESS_KEY: "${S3_SECRET_ACCESS_KEY:-}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      LLM_PRIMARY_PROVIDER: "${LLM_PRIMARY_PROVIDER:-openai}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-gpt-4.1-mini}"
+      OPENROUTER_MODEL: "${OPENROUTER_MODEL:-openai/gpt-4.1-mini}"
+      OPENROUTER_BASE_URL: "${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1/chat/completions}"
+      LLM_TIMEOUT_SECONDS: "${LLM_TIMEOUT_SECONDS:-120}"
     expose:
       - "3001"
     restart: unless-stopped

@@ -8,7 +8,7 @@ COPY apps/transcription-service ./apps/transcription-service
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir ./apps/transcription-service
+RUN pip install --no-cache-dir --retries 10 --timeout 600 ./apps/transcription-service
 
 EXPOSE 3002
 
