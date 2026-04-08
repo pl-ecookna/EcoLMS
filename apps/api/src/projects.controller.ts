@@ -108,7 +108,11 @@ export class ProjectsController {
     @Param("id") id: string,
     @Body()
     body: {
-      stage: "course_outline" | "course_content" | "course_test"
+      stage:
+        | "source_compiled"
+        | "course_outline"
+        | "course_content"
+        | "course_test"
       autoGenerateAll?: boolean
       overwriteExisting?: boolean
     }

@@ -276,7 +276,7 @@ export async function startProject(projectId: string) {
 export async function generateStage(
   projectId: string,
   input: {
-    stage: "course_outline" | "course_content" | "course_test"
+    stage: "source_compiled" | "course_outline" | "course_content" | "course_test"
     autoGenerateAll?: boolean
     overwriteExisting?: boolean
   }

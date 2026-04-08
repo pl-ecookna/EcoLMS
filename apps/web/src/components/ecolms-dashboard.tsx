@@ -133,8 +133,13 @@ const SUPPORTED_CREATE_EXTENSIONS = new Set([
   "mpg",
 ])
 
-type GenerationStage = "course_outline" | "course_content" | "course_test"
+type GenerationStage =
+  | "source_compiled"
+  | "course_outline"
+  | "course_content"
+  | "course_test"
 const VISIBLE_STAGES: GenerationStage[] = [
+  "source_compiled",
   "course_outline",
   "course_content",
   "course_test",
@@ -337,7 +342,7 @@ export function EcolmsDashboard() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [selectedProject, setSelectedProject] =
     useState<ProjectDetailRecord | null>(null)
-  const [selectedStage, setSelectedStage] = useState<GenerationStage>("course_outline")
+  const [selectedStage, setSelectedStage] = useState<GenerationStage>("source_compiled")
   const [editorValue, setEditorValue] = useState("")
   const [isEditing, setIsEditing] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
@@ -852,7 +857,7 @@ export function EcolmsDashboard() {
     }
 
     setMutating(true)
-    setGeneratingStage("course_outline")
+    setGeneratingStage("source_compiled")
     setListError(null)
     try {
       const projectDetail = await getProject(projectId)
@@ -863,7 +868,7 @@ export function EcolmsDashboard() {
       }
 
       await generateStage(projectId, {
-        stage: "course_outline",
+        stage: "source_compiled",
         autoGenerateAll: true,
         overwriteExisting: false,
       })
@@ -872,7 +877,7 @@ export function EcolmsDashboard() {
       await refreshProject(projectId)
       setSelectedId(projectId)
       setIsEditing(false)
-      setSelectedStage("course_outline")
+      setSelectedStage("source_compiled")
     } catch (error) {
       setListError(error instanceof Error ? error.message : "Не удалось запустить генерацию")
     } finally {
@@ -955,11 +960,17 @@ export function EcolmsDashboard() {
   const detailUploadVisible = uploadContext === "detail" && uploadPhase !== "idle"
   const createUploadVisible = uploadContext === "create" && uploadPhase !== "idle"
 
-  const canGenerateOutline = Boolean(selectedProject?.sourceFiles.length)
-  const canGenerateContent = isStageDone(selectedProject, "course_outline")
-  const canGenerateTest = isStageDone(selectedProject, "course_content")
+  const canGenerateSource = Boolean(selectedProject?.sourceFiles.length)
+  const sourceTextReady = Boolean(getStageMarkdown(selectedProject, "source_compiled").trim())
+  const sourceDone = isStageDone(selectedProject, "source_compiled")
+  const canGenerateOutline = sourceDone && sourceTextReady
+  const canGenerateContent =
+    sourceDone && sourceTextReady && isStageDone(selectedProject, "course_outline")
+  const canGenerateTest =
+    sourceDone && sourceTextReady && isStageDone(selectedProject, "course_content")
 
   const generationLabelByStage: Record<GenerationStage, string> = {
+    source_compiled: "Распознать материалы",
     course_outline: "Создать план",
     course_content: "Создать материалы",
     course_test: "Создать тест",
@@ -983,6 +994,9 @@ export function EcolmsDashboard() {
   ]
 
   function isGenerateDisabled(stage: GenerationStage) {
+    if (stage === "source_compiled") {
+      return !canGenerateSource || mutating
+    }
     if (stage === "course_outline") {
       return !canGenerateOutline || mutating
     }
@@ -996,13 +1010,28 @@ export function EcolmsDashboard() {
     if (mutating) {
       return "Дождитесь завершения текущей операции."
     }
-    if (stage === "course_outline" && !canGenerateOutline) {
+    if (stage === "source_compiled" && !canGenerateSource) {
       return "Сначала загрузите исходные файлы курса."
     }
+    if (stage === "course_outline" && !canGenerateOutline) {
+      if (!sourceDone) {
+        return "Сначала запустите и завершите этап «Источник»."
+      }
+      if (!sourceTextReady) {
+        return "В этапе «Источник» должен быть текст перед генерацией плана."
+      }
+      return "Сначала подготовьте источник."
+    }
     if (stage === "course_content" && !canGenerateContent) {
+      if (!sourceDone || !sourceTextReady) {
+        return "Сначала завершите и заполните этап «Источник»."
+      }
       return "Сначала создайте план курса."
     }
     if (stage === "course_test" && !canGenerateTest) {
+      if (!sourceDone || !sourceTextReady) {
+        return "Сначала завершите и заполните этап «Источник»."
+      }
       return "Сначала создайте обучающие материалы."
     }
     return null
@@ -1166,7 +1195,7 @@ export function EcolmsDashboard() {
                                     onClick={() => void handleGenerateAllForProject(project.id)}
                                     className="items-start gap-3 py-2"
                                   >
-                                    {generatingStage === "course_outline" && mutating ? (
+                                    {generatingStage === "source_compiled" && mutating ? (
                                       <Loader2Icon className="mt-0.5 size-4 animate-spin" />
                                     ) : (
                                       <WandSparklesIcon className="mt-0.5 size-4" />
@@ -1176,7 +1205,7 @@ export function EcolmsDashboard() {
                                         Автогенерация
                                       </div>
                                       <div className="text-xs text-muted-foreground">
-                                        Последовательно запустить план, материалы и тест.
+                                        Последовательно запустить источник, план, материалы и тест.
                                       </div>
                                     </div>
                                   </DropdownMenuItem>
@@ -1333,7 +1362,7 @@ export function EcolmsDashboard() {
                             </span>
                           </div>
                         ) : null}
-                        <div className="grid grid-cols-3 gap-3">
+                        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                           {VISIBLE_STAGES.map((stage) => {
                             const stageStatus =
                               selectedProject.stages.find((item) => item.id === stage)?.status ??

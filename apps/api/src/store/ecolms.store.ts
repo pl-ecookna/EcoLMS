@@ -193,6 +193,14 @@ function stageGenerationDone(stage: StageId, jobs: ProcessingJobRecord[]) {
   return jobs.some((job) => job.stage === stage && job.status === "done")
 }
 
+function stageMarkdown(project: ProjectDetailRecord, stage: StageId) {
+  const artifact = project.artifacts.find(
+    (item) => item.stage === stage && item.format === "md"
+  )
+  const value = artifact?.contentMd ?? project.stageDrafts[stage] ?? ""
+  return value.trim()
+}
+
 function buildStages(
   currentStage: StageId,
   status: ProjectStatus,
@@ -603,7 +611,11 @@ export class EcolmsStore {
   async generateStage(
     projectId: string,
     input: {
-      stage: "course_outline" | "course_content" | "course_test"
+      stage:
+        | "source_compiled"
+        | "course_outline"
+        | "course_content"
+        | "course_test"
       autoGenerateAll?: boolean
       overwriteExisting?: boolean
     }
@@ -619,12 +631,36 @@ export class EcolmsStore {
 
     const jobs = await this.listJobs(projectId)
     const isDone = (stage: StageId) => stageGenerationDone(stage, jobs)
+    const sourceReady = isDone("source_compiled")
+    const sourceTextReady = Boolean(stageMarkdown(project, "source_compiled"))
+    const outlineReady = isDone("course_outline")
+    const contentReady = isDone("course_content")
 
-    if (targetStage === "course_content" && !isDone("course_outline")) {
+    if (targetStage === "course_outline" && !sourceReady) {
+      throw new BadRequestException(
+        "Сначала запустите и завершите этап «Источник»."
+      )
+    }
+    if (targetStage === "course_outline" && !sourceTextReady) {
+      throw new BadRequestException(
+        "Этап «Источник» должен содержать текст перед генерацией плана."
+      )
+    }
+    if (targetStage === "course_content" && !outlineReady) {
       throw new BadRequestException("Сначала создайте план курса")
     }
-    if (targetStage === "course_test" && !isDone("course_content")) {
+    if (targetStage === "course_content" && (!sourceReady || !sourceTextReady)) {
+      throw new BadRequestException(
+        "Сначала завершите и заполните этап «Источник»."
+      )
+    }
+    if (targetStage === "course_test" && !contentReady) {
       throw new BadRequestException("Сначала создайте обучающие материалы")
+    }
+    if (targetStage === "course_test" && (!sourceReady || !sourceTextReady)) {
+      throw new BadRequestException(
+        "Сначала завершите и заполните этап «Источник»."
+      )
     }
 
     if (isDone(targetStage) && !overwriteExisting) {
@@ -633,18 +669,10 @@ export class EcolmsStore {
       )
     }
 
-    const shouldRunSourceBeforeOutline =
-      targetStage === "course_outline" && !isDone("source_compiled")
-
-    const queuedStage: StageId = shouldRunSourceBeforeOutline
-      ? "source_compiled"
-      : targetStage
-    const nextStageAfterCurrent =
-      shouldRunSourceBeforeOutline && targetStage === "course_outline"
-        ? "course_outline"
-        : autoGenerateAll
-          ? nextStageFor(queuedStage)
-          : null
+    const queuedStage: StageId = targetStage
+    const nextStageAfterCurrent = autoGenerateAll
+      ? nextStageFor(queuedStage)
+      : null
 
     const job = await this.db.transaction(async (client) => {
       const created = await client.query<Record<string, unknown>>(
