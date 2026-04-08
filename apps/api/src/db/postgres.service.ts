@@ -3,12 +3,18 @@ import { randomUUID } from "node:crypto"
 import { Pool, PoolClient, type QueryResultRow } from "pg"
 
 import {
-  stageOrder,
   type ProjectDetailRecord,
   type ProjectStatus,
   type ProjectStageRecord,
   type StageId,
 } from "../store/ecolms.store"
+
+const stageOrder: StageId[] = [
+  "source_compiled",
+  "course_outline",
+  "course_content",
+  "course_test",
+]
 
 const logger = new Logger("PostgresService")
 

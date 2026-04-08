@@ -47,6 +47,9 @@ function parseRedisUrl(redisUrl: string) {
   return {
     host: url.hostname,
     port: Number(url.port || 6379),
+    username: decodeURIComponent(url.username || ""),
+    password: decodeURIComponent(url.password || ""),
+    db: Number((url.pathname || "/0").replace("/", "") || "0"),
   }
 }
 
@@ -122,17 +125,58 @@ function decodeOneResponse(buffer: string) {
 }
 
 async function runRedisCommand(redisUrl: string, parts: string[]) {
-  const { host, port } = parseRedisUrl(redisUrl)
+  const { host, port, username, password, db } = parseRedisUrl(redisUrl)
   return new Promise<unknown>((resolve, reject) => {
-    const socket = net.createConnection({ host, port }, () => {
-      socket.write(encodeCommand(parts))
-    })
+    const socket = net.createConnection({ host, port })
 
     let buffer = ""
+    let initialized = false
+
+    const initCommands: string[][] = []
+    if (password) {
+      if (username) {
+        initCommands.push(["AUTH", username, password])
+      } else {
+        initCommands.push(["AUTH", password])
+      }
+    }
+    if (Number.isFinite(db) && db > 0) {
+      initCommands.push(["SELECT", String(db)])
+    }
+
+    socket.on("connect", () => {
+      if (initCommands.length > 0) {
+        socket.write(initCommands.map((cmd) => encodeCommand(cmd)).join(""))
+        return
+      }
+      initialized = true
+      socket.write(encodeCommand(parts))
+    })
 
     socket.on("data", (chunk) => {
       buffer += chunk.toString("utf8")
       try {
+        if (!initialized && initCommands.length > 0) {
+          for (let index = 0; index < initCommands.length; index += 1) {
+            const decodedInit = decodeOneResponse(buffer)
+            if (!decodedInit) {
+              return
+            }
+            buffer = decodedInit.rest
+            if (typeof decodedInit.value === "string" && decodedInit.value === "OK") {
+              continue
+            }
+            reject(new Error(`Redis init failed: ${String(decodedInit.value)}`))
+            socket.destroy()
+            return
+          }
+          initialized = true
+          socket.write(encodeCommand(parts))
+          if (!buffer) {
+            return
+          }
+        }
+
         const decoded = decodeOneResponse(buffer)
         if (!decoded) {
           return
