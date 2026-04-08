@@ -5,6 +5,10 @@ ENV PYTHONUNBUFFERED=1
 ENV TRANSCRIPTION_PORT=3002
 
 COPY apps/transcription-service ./apps/transcription-service
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir ./apps/transcription-service
 
 EXPOSE 3002
 

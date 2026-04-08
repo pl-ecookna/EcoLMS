@@ -7,6 +7,8 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any
+from urllib import error as urlerror
+from urllib import request as urlrequest
 from urllib.parse import urlparse
 
 import psycopg
@@ -21,7 +23,11 @@ class WorkerConfig:
     transcription_service_url: str = "http://localhost:3002"
     postgres_url: str = "postgresql://postgres:password@localhost:5432/ecolms"
     redis_url: str = "redis://localhost:6379"
+    s3_endpoint: str = "https://s3.example.invalid"
     s3_bucket: str = "ecolms"
+    s3_region: str = "ru-1"
+    s3_access_key_id: str = ""
+    s3_secret_access_key: str = ""
     job_queue_key: str = "ecolms:processing-jobs"
 
 
@@ -77,7 +83,11 @@ def load_config() -> WorkerConfig:
             default_prod=INTERNAL_REDIS_URL,
             default_dev=EXTERNAL_REDIS_URL,
         ),
+        s3_endpoint=os.getenv("S3_ENDPOINT", "https://s3.example.invalid"),
         s3_bucket=os.getenv("S3_BUCKET", "ecolms"),
+        s3_region=os.getenv("S3_REGION", "ru-1"),
+        s3_access_key_id=os.getenv("S3_ACCESS_KEY_ID", ""),
+        s3_secret_access_key=os.getenv("S3_SECRET_ACCESS_KEY", ""),
         job_queue_key=os.getenv("WORKER_JOB_QUEUE_KEY", "ecolms:processing-jobs"),
     )
 
@@ -241,6 +251,15 @@ def make_stage_markdown(project_name: str, stage: str, topic: str) -> str:
     )
 
 
+def extract_summary(text: str, limit: int = 1500) -> str:
+    compact = " ".join(text.split())
+    if not compact:
+        return "Транскрипт получен, но текст пуст."
+    if len(compact) <= limit:
+        return compact
+    return f"{compact[:limit].rstrip()}..."
+
+
 def stage_prompt_metadata(stage: str) -> dict[str, Any]:
     prompts = prompt_bundle_for_stage(stage)
     return {
@@ -322,6 +341,74 @@ def load_project(conn: psycopg.Connection, project_id: str) -> dict[str, Any]:
     if row is None:
         raise RuntimeError(f"Project not found: {project_id}")
     return dict(row)
+
+
+def load_source_files(conn: psycopg.Connection, project_id: str) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        select * from source_files
+        where project_id = %s and upload_status = 'completed'
+        order by position asc, created_at asc
+        """,
+        (project_id,),
+    ).fetchall()
+    return [dict(item) for item in rows]
+
+
+def pick_video_source_file(files: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for source_file in files:
+        mime_type = str(source_file.get("mime_type") or "").lower()
+        kind = str(source_file.get("kind") or "").lower()
+        if mime_type.startswith("video/") or kind == "video":
+            return source_file
+    return None
+
+
+def call_transcription_service(
+    config: WorkerConfig, source_file: dict[str, Any], timeout_seconds: float = 1200.0
+) -> dict[str, Any]:
+    endpoint = f"{config.transcription_service_url.rstrip('/')}/transcribe"
+    payload = {
+        "source": {
+            "bucket": config.s3_bucket,
+            "key": source_file["storage_key"],
+            "originalName": source_file.get("original_name"),
+            "mimeType": source_file.get("mime_type"),
+        },
+        "s3": {
+            "endpoint": config.s3_endpoint,
+            "bucket": config.s3_bucket,
+            "region": config.s3_region,
+            "accessKeyId": config.s3_access_key_id,
+            "secretAccessKey": config.s3_secret_access_key,
+        },
+    }
+    req = urlrequest.Request(
+        endpoint,
+        method="POST",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Content-Type": "application/json; charset=utf-8"},
+    )
+    try:
+        with urlrequest.urlopen(req, timeout=timeout_seconds) as response:
+            raw = response.read().decode("utf-8")
+    except urlerror.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(
+            f"Transcription service HTTP {exc.code}: {detail or exc.reason}"
+        ) from exc
+    except urlerror.URLError as exc:
+        raise RuntimeError(f"Transcription service недоступен: {exc.reason}") from exc
+
+    body = json.loads(raw)
+    if not body.get("success"):
+        error_payload = body.get("error") or {}
+        message = error_payload.get("message") or "Ошибка транскрибации"
+        raise RuntimeError(str(message))
+    data = body.get("data")
+    if not isinstance(data, dict):
+        raise RuntimeError("Transcription service вернул невалидный payload")
+    return data
 
 
 def load_job(conn: psycopg.Connection, job_id: str) -> dict[str, Any] | None:
@@ -430,13 +517,34 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
             return
 
         project = load_project(conn, job["project_id"])
-        markdown = make_stage_markdown(
-            project["name"], job["stage"], project["source_summary"]
-        )
+        transcription_data: dict[str, Any] | None = None
+        source_file: dict[str, Any] | None = None
+        topic_for_markdown = project["source_summary"]
+        if job["stage"] == "source_compiled":
+            source_files = load_source_files(conn, project["id"])
+            source_file = pick_video_source_file(source_files)
+            if source_file is not None:
+                transcription_data = call_transcription_service(config, source_file)
+                transcript_text = str(transcription_data.get("text") or "").strip()
+                topic_for_markdown = extract_summary(transcript_text)
+
+        markdown = make_stage_markdown(project["name"], job["stage"], topic_for_markdown)
         payload = job.get("payload_json") or {}
         if isinstance(payload, str):
             payload = json.loads(payload)
         prompt_metadata = stage_prompt_metadata(job["stage"])
+        stage_metadata = dict(prompt_metadata)
+        if transcription_data is not None and source_file is not None:
+            stage_metadata["transcription"] = {
+                "sourceFileId": source_file["id"],
+                "sourceStorageKey": source_file["storage_key"],
+                "sourceOriginalName": source_file.get("original_name"),
+                "sourceMimeType": source_file.get("mime_type"),
+                "model": transcription_data.get("model"),
+                "duration": transcription_data.get("duration"),
+                "textLength": len(str(transcription_data.get("text") or "")),
+                "segmentsCount": len(transcription_data.get("segments") or []),
+            }
         auto_generate_all = bool(payload.get("autoGenerateAll"))
         queued_next_stage = payload.get("nextStage")
         if queued_next_stage is not None and not isinstance(queued_next_stage, str):
@@ -450,8 +558,8 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
         with conn.transaction():
             set_job_processing(conn, job["id"])
             append_project_log(conn, project["id"], f"Worker начал обработку job {job['stage']}.")
-            ensure_stage_artifact(conn, job, markdown, prompt_metadata)
-            set_job_done(conn, job["id"], job["stage"], prompt_metadata)
+            ensure_stage_artifact(conn, job, markdown, stage_metadata)
+            set_job_done(conn, job["id"], job["stage"], stage_metadata)
             if resolved_next_stage:
                 next_job_id = f"{project['id']}-{resolved_next_stage}-{int(time.time() * 1000)}"
                 next_job_payload = {

@@ -67,6 +67,8 @@ services:
       dockerfile: docker/transcription-service.Dockerfile
     environment:
       TRANSCRIPTION_PORT: "3002"
+      WHISPER_MODEL_SIZE: "${WHISPER_MODEL_SIZE:-small}"
+      WHISPER_COMPUTE_TYPE: "${WHISPER_COMPUTE_TYPE:-int8}"
     expose:
       - "3002"
     restart: unless-stopped
