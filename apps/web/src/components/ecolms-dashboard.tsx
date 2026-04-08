@@ -6,6 +6,7 @@ import {
   AlertCircleIcon,
   CheckCircle2Icon,
   DatabaseIcon,
+  FileTextIcon,
   PencilIcon,
   Loader2Icon,
   MoreHorizontalIcon,
@@ -360,6 +361,11 @@ export function EcolmsDashboard() {
   const [detailError, setDetailError] = useState<string | null>(null)
   const [generatingStage, setGeneratingStage] = useState<GenerationStage | null>(null)
   const [systemHealth, setSystemHealth] = useState<SystemHealthRecord | null>(null)
+  const [sourcePreviewOpen, setSourcePreviewOpen] = useState(false)
+  const [sourcePreviewLoading, setSourcePreviewLoading] = useState(false)
+  const [sourcePreviewError, setSourcePreviewError] = useState<string | null>(null)
+  const [sourcePreviewProjectName, setSourcePreviewProjectName] = useState("")
+  const [sourcePreviewContent, setSourcePreviewContent] = useState("")
 
   const totalPages = Math.max(1, Math.ceil(projectTotal / PAGE_SIZE))
   const currentStageArtifact = getStageArtifact(selectedProject, selectedStage)
@@ -818,6 +824,28 @@ export function EcolmsDashboard() {
     }
   }
 
+  async function handleOpenStructuredSource(projectId: string, projectName: string) {
+    setSourcePreviewOpen(true)
+    setSourcePreviewLoading(true)
+    setSourcePreviewError(null)
+    setSourcePreviewProjectName(projectName)
+    setSourcePreviewContent("")
+
+    try {
+      const detail = await getProject(projectId)
+      setSourcePreviewProjectName(detail.name)
+      setSourcePreviewContent(getStageMarkdown(detail, "source_compiled"))
+    } catch (error) {
+      setSourcePreviewError(
+        error instanceof Error
+          ? error.message
+          : "Не удалось загрузить структурированный источник."
+      )
+    } finally {
+      setSourcePreviewLoading(false)
+    }
+  }
+
   async function handleGenerateAllForProject(projectId: string) {
     if (!confirmDiscardUnsavedChanges()) {
       return
@@ -1153,6 +1181,22 @@ export function EcolmsDashboard() {
                                     </div>
                                   </DropdownMenuItem>
                                   <DropdownMenuItem
+                                    onClick={() =>
+                                      void handleOpenStructuredSource(project.id, project.name)
+                                    }
+                                    className="items-start gap-3 py-2"
+                                  >
+                                    <FileTextIcon className="mt-0.5 size-4" />
+                                    <div className="space-y-0.5">
+                                      <div className="whitespace-nowrap font-medium">
+                                        Показать источник
+                                      </div>
+                                      <div className="text-xs text-muted-foreground">
+                                        Открыть исходный текст после анализа и распознавания.
+                                      </div>
+                                    </div>
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
                                     variant="destructive"
                                     onClick={() => void handleDeleteProject(project)}
                                     className="items-start gap-3 py-2"
@@ -1429,24 +1473,29 @@ export function EcolmsDashboard() {
                               </div>
                               <div className="space-y-1.5">
                                 <h3 className="text-base font-semibold">Результат пока не создан</h3>
-                                <p className="text-sm text-muted-foreground">
-                                  Запустите генерацию для этапа «{stageLabels[selectedStage]}», чтобы
-                                  увидеть текст в этом окне.
-                                </p>
+                                {generatingStage === selectedStage && mutating ? null : (
+                                  <p className="text-sm text-muted-foreground">
+                                    Запустите генерацию для этапа «{stageLabels[selectedStage]}», чтобы
+                                    увидеть текст в этом окне.
+                                  </p>
+                                )}
                               </div>
                               <div className="space-y-1.5">
-                                <Button
-                                  variant="outline"
-                                  onClick={() => void handleGenerate(selectedStage)}
-                                  disabled={isGenerateDisabled(selectedStage)}
-                                >
-                                  {generatingStage === selectedStage && mutating ? (
-                                    <Loader2Icon data-icon="inline-start" className="animate-spin" />
-                                  ) : (
+                                {generatingStage === selectedStage && mutating ? (
+                                  <div className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm text-muted-foreground">
+                                    <Loader2Icon className="size-4 animate-spin" />
+                                    Идёт генерация...
+                                  </div>
+                                ) : (
+                                  <Button
+                                    variant="outline"
+                                    onClick={() => void handleGenerate(selectedStage)}
+                                    disabled={isGenerateDisabled(selectedStage)}
+                                  >
                                     <WandSparklesIcon data-icon="inline-start" />
-                                  )}
-                                  {generationLabelByStage[selectedStage]}
-                                </Button>
+                                    {generationLabelByStage[selectedStage]}
+                                  </Button>
+                                )}
                                 {isGenerateDisabled(selectedStage) ? (
                                   <p className="text-xs text-muted-foreground">
                                     {getGenerateBlockedReason(selectedStage)}
@@ -1763,6 +1812,46 @@ export function EcolmsDashboard() {
           </ScrollArea>
           <SheetFooter className="border-t">
             <Button variant="outline" onClick={() => setEditOpen(false)}>
+              Закрыть
+            </Button>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
+
+      <Sheet open={sourcePreviewOpen} onOpenChange={setSourcePreviewOpen}>
+        <SheetContent className="w-full gap-0 sm:max-w-[980px]">
+          <SheetHeader className="border-b">
+            <SheetTitle>Структурированный источник</SheetTitle>
+            <SheetDescription>
+              Курс: {sourcePreviewProjectName || "Без названия"}
+            </SheetDescription>
+          </SheetHeader>
+          <ScrollArea className="flex-1">
+            <div className="p-4">
+              {sourcePreviewLoading ? (
+                <div className="space-y-3">
+                  <Skeleton className="h-5 w-2/5" />
+                  <Skeleton className="h-[520px] w-full" />
+                </div>
+              ) : sourcePreviewError ? (
+                <Alert variant="destructive">
+                  <AlertCircleIcon />
+                  <AlertTitle>Не удалось открыть источник</AlertTitle>
+                  <AlertDescription>{sourcePreviewError}</AlertDescription>
+                </Alert>
+              ) : sourcePreviewContent.trim() ? (
+                <div className="min-h-[620px] border border-border bg-muted/20 p-4">
+                  <MarkdownContent value={sourcePreviewContent} />
+                </div>
+              ) : (
+                <div className="flex min-h-[620px] items-center justify-center border border-dashed border-border/70 bg-muted/10 p-8 text-center text-sm text-muted-foreground">
+                  Для этого курса пока нет сохранённого структурированного источника.
+                </div>
+              )}
+            </div>
+          </ScrollArea>
+          <SheetFooter className="border-t">
+            <Button variant="outline" onClick={() => setSourcePreviewOpen(false)}>
               Закрыть
             </Button>
           </SheetFooter>
