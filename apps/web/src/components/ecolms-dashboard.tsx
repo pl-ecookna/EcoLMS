@@ -74,6 +74,7 @@ import {
   deleteSourceFile,
   generateStage,
   getProject,
+  getProjectStatus,
   initUpload,
   listProjects,
   projectStatusLabels,
@@ -285,6 +286,7 @@ export function EcolmsDashboard() {
   const [uploadProgress, setUploadProgress] = useState(0)
   const [listError, setListError] = useState<string | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
+  const [generatingStage, setGeneratingStage] = useState<GenerationStage | null>(null)
 
   const totalPages = Math.max(1, Math.ceil(projectTotal / PAGE_SIZE))
   const currentStageArtifact = getStageArtifact(selectedProject, selectedStage)
@@ -383,6 +385,70 @@ export function EcolmsDashboard() {
     window.addEventListener("beforeunload", handleBeforeUnload)
     return () => window.removeEventListener("beforeunload", handleBeforeUnload)
   }, [hasUnsavedChanges])
+
+  useEffect(() => {
+    const projectId = selectedProject?.id
+    if (!projectId || selectedProject?.status !== "processing") {
+      return
+    }
+
+    let cancelled = false
+
+    const pollStatus = async () => {
+      try {
+        const status = await getProjectStatus(projectId)
+        if (cancelled) {
+          return
+        }
+
+        setProjects((current) =>
+          current.map((project) =>
+            project.id === status.id
+              ? {
+                  ...project,
+                  status: status.status,
+                  currentStage: status.currentStage,
+                  progress: status.progress,
+                  updatedAt: status.updatedAt,
+                }
+              : project
+          )
+        )
+
+        setSelectedProject((current) =>
+          current && current.id === status.id
+            ? {
+                ...current,
+                status: status.status,
+                currentStage: status.currentStage,
+                progress: status.progress,
+                updatedAt: status.updatedAt,
+              }
+            : current
+        )
+
+        if (status.status !== "processing" && !hasUnsavedChanges) {
+          const detail = await getProject(status.id)
+          if (cancelled) {
+            return
+          }
+          setSelectedProject(detail)
+        }
+      } catch {
+        return
+      }
+    }
+
+    void pollStatus()
+    const intervalId = window.setInterval(() => {
+      void pollStatus()
+    }, 4000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [hasUnsavedChanges, selectedProject?.id, selectedProject?.status])
 
   function confirmDiscardUnsavedChanges() {
     if (!hasUnsavedChanges) {
@@ -658,6 +724,7 @@ export function EcolmsDashboard() {
     }
 
     setMutating(true)
+    setGeneratingStage("course_outline")
     setListError(null)
     try {
       const projectDetail = await getProject(projectId)
@@ -681,6 +748,7 @@ export function EcolmsDashboard() {
     } catch (error) {
       setListError(error instanceof Error ? error.message : "Не удалось запустить генерацию")
     } finally {
+      setGeneratingStage(null)
       setMutating(false)
     }
   }
@@ -736,6 +804,7 @@ export function EcolmsDashboard() {
     }
 
     setMutating(true)
+    setGeneratingStage(stage)
     setListError(null)
     try {
       await generateStage(selectedProject.id, {
@@ -750,6 +819,7 @@ export function EcolmsDashboard() {
     } catch (error) {
       setListError(error instanceof Error ? error.message : "Не удалось запустить генерацию")
     } finally {
+      setGeneratingStage(null)
       setMutating(false)
     }
   }
@@ -900,7 +970,11 @@ export function EcolmsDashboard() {
                                     onClick={() => void handleGenerateAllForProject(project.id)}
                                     className="items-start gap-3 py-2"
                                   >
-                                    <WandSparklesIcon className="mt-0.5 size-4" />
+                                    {generatingStage === "course_outline" && mutating ? (
+                                      <Loader2Icon className="mt-0.5 size-4 animate-spin" />
+                                    ) : (
+                                      <WandSparklesIcon className="mt-0.5 size-4" />
+                                    )}
                                     <div className="space-y-0.5">
                                       <div className="whitespace-nowrap font-medium">
                                         Автогенерация
@@ -1038,6 +1112,15 @@ export function EcolmsDashboard() {
                   <CardContent className="flex-1 space-y-4 p-4">
                     <Card className="flex h-full min-h-[620px] flex-col">
                       <CardHeader className="space-y-4">
+                        {selectedProject.status === "processing" ? (
+                          <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+                            <Loader2Icon className="size-4 animate-spin" />
+                            <span>
+                              Идёт генерация: {stageLabels[selectedProject.currentStage]}. Обновляем
+                              статус автоматически.
+                            </span>
+                          </div>
+                        ) : null}
                         <div className="grid grid-cols-3 gap-3">
                           {VISIBLE_STAGES.map((stage) => {
                             const stageStatus =
@@ -1083,7 +1166,11 @@ export function EcolmsDashboard() {
                                         onClick={() => void handleGenerate(stage)}
                                         className="items-start gap-3 py-2"
                                       >
-                                        <WandSparklesIcon className="mt-0.5 size-4" />
+                                        {generatingStage === stage && mutating ? (
+                                          <Loader2Icon className="mt-0.5 size-4 animate-spin" />
+                                        ) : (
+                                          <WandSparklesIcon className="mt-0.5 size-4" />
+                                        )}
                                         <div className="space-y-0.5">
                                           <div className="whitespace-nowrap font-medium">
                                             {generationLabelByStage[stage]}
@@ -1185,7 +1272,11 @@ export function EcolmsDashboard() {
                                   onClick={() => void handleGenerate(selectedStage)}
                                   disabled={isGenerateDisabled(selectedStage)}
                                 >
-                                  <WandSparklesIcon data-icon="inline-start" />
+                                  {generatingStage === selectedStage && mutating ? (
+                                    <Loader2Icon data-icon="inline-start" className="animate-spin" />
+                                  ) : (
+                                    <WandSparklesIcon data-icon="inline-start" />
+                                  )}
                                   {generationLabelByStage[selectedStage]}
                                 </Button>
                                 {isGenerateDisabled(selectedStage) ? (
