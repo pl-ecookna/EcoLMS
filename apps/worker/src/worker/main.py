@@ -180,15 +180,54 @@ def parse_resp(buffer: bytes) -> tuple[Any, bytes] | None:
     return None
 
 
-def redis_url_parts(redis_url: str) -> tuple[str, int]:
+def redis_url_parts(redis_url: str) -> tuple[str, int, str | None, str | None, int]:
     parsed = urlparse(redis_url)
-    return parsed.hostname or "localhost", parsed.port or 6379
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 6379
+    username = urlparse.unquote(parsed.username) if parsed.username else None
+    password = urlparse.unquote(parsed.password) if parsed.password else None
+    db = 0
+    if parsed.path and parsed.path != "/":
+        try:
+            db = int(parsed.path.lstrip("/"))
+        except ValueError:
+            db = 0
+    return host, port, username, password, db
 
 
 def redis_command(redis_url: str, *parts: str, timeout: float = 6.0) -> Any:
-    host, port = redis_url_parts(redis_url)
+    host, port, username, password, db = redis_url_parts(redis_url)
     with socket.create_connection((host, port), timeout=timeout) as sock:
         sock.settimeout(timeout)
+        if password:
+            auth_parts = ["AUTH"]
+            if username:
+                auth_parts.extend([username, password])
+            else:
+                auth_parts.append(password)
+            sock.sendall(encode_resp(auth_parts))
+            auth_buffer = b""
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    raise RuntimeError("Redis connection closed during AUTH")
+                auth_buffer += chunk
+                decoded = parse_resp(auth_buffer)
+                if decoded is not None:
+                    break
+
+        if db > 0:
+            sock.sendall(encode_resp(["SELECT", str(db)]))
+            select_buffer = b""
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    raise RuntimeError("Redis connection closed during SELECT")
+                select_buffer += chunk
+                decoded = parse_resp(select_buffer)
+                if decoded is not None:
+                    break
+
         sock.sendall(encode_resp(list(parts)))
         buffer = b""
         while True:
