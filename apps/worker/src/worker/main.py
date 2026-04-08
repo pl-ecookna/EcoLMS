@@ -739,7 +739,10 @@ def set_job_failed(conn: psycopg.Connection, job_id: str, error_text: str) -> No
 
 
 def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
-    conn = psycopg.connect(config.postgres_url, row_factory=dict_row)
+    # Use autocommit mode so `with conn.transaction()` always creates a real
+    # top-level transaction. Otherwise prior SELECT opens an implicit outer
+    # transaction and later writes can be rolled back on connection close.
+    conn = psycopg.connect(config.postgres_url, row_factory=dict_row, autocommit=True)
     try:
         job = load_job(conn, job_message["jobId"])
         if job is None:
