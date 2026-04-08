@@ -2,13 +2,18 @@
 
 import { useEffect, useRef, useState, type DragEvent } from "react"
 import {
+  ActivityIcon,
   AlertCircleIcon,
+  CheckCircle2Icon,
+  DatabaseIcon,
   PencilIcon,
   Loader2Icon,
   MoreHorizontalIcon,
   PlusIcon,
+  ServerCogIcon,
   SaveIcon,
   SparklesIcon,
+  XCircleIcon,
   WandSparklesIcon,
   Trash2Icon,
   UploadIcon,
@@ -29,6 +34,11 @@ import {
 } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@/components/ui/hover-card"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -75,9 +85,13 @@ import {
   generateStage,
   getProject,
   getProjectStatus,
+  getSystemHealth,
   initUpload,
   listProjects,
   projectStatusLabels,
+  type ServiceHealthState,
+  type ServiceHealthStatus,
+  type SystemHealthRecord,
   signUploadPart,
   stageLabels,
   updateArtifact,
@@ -220,6 +234,64 @@ function sourceFileStatusLabel(status: string) {
   }
 }
 
+function serviceStatusLabel(status: ServiceHealthStatus) {
+  switch (status) {
+    case "up":
+      return "Доступен"
+    case "down":
+      return "Недоступен"
+    case "degraded":
+      return "Проблемы"
+    default:
+      return "Неизвестно"
+  }
+}
+
+function serviceStatusBadgeClass(status: ServiceHealthStatus) {
+  switch (status) {
+    case "up":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700"
+    case "down":
+      return "border-red-200 bg-red-50 text-red-700"
+    case "degraded":
+      return "border-amber-200 bg-amber-50 text-amber-700"
+    default:
+      return "border-border bg-muted text-muted-foreground"
+  }
+}
+
+function serviceStatusIcon(status: ServiceHealthStatus) {
+  switch (status) {
+    case "up":
+      return <CheckCircle2Icon className="size-4 text-emerald-600" />
+    case "down":
+      return <XCircleIcon className="size-4 text-red-600" />
+    case "degraded":
+      return <AlertCircleIcon className="size-4 text-amber-600" />
+    default:
+      return <ActivityIcon className="size-4 text-muted-foreground" />
+  }
+}
+
+function serviceKindIcon(serviceKey: string) {
+  if (serviceKey === "postgres") {
+    return <DatabaseIcon className="size-4 text-muted-foreground" />
+  }
+  if (serviceKey === "redis") {
+    return <ServerCogIcon className="size-4 text-muted-foreground" />
+  }
+  if (serviceKey === "openai") {
+    return <SparklesIcon className="size-4 text-muted-foreground" />
+  }
+  if (serviceKey === "worker") {
+    return <ActivityIcon className="size-4 text-muted-foreground" />
+  }
+  if (serviceKey === "transcriptionService") {
+    return <ServerCogIcon className="size-4 text-muted-foreground" />
+  }
+  return <ActivityIcon className="size-4 text-muted-foreground" />
+}
+
 function MarkdownContent({ value }: { value: string }) {
   return (
     <div className="text-sm leading-6 text-foreground">
@@ -287,6 +359,7 @@ export function EcolmsDashboard() {
   const [listError, setListError] = useState<string | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
   const [generatingStage, setGeneratingStage] = useState<GenerationStage | null>(null)
+  const [systemHealth, setSystemHealth] = useState<SystemHealthRecord | null>(null)
 
   const totalPages = Math.max(1, Math.ceil(projectTotal / PAGE_SIZE))
   const currentStageArtifact = getStageArtifact(selectedProject, selectedStage)
@@ -347,6 +420,33 @@ export function EcolmsDashboard() {
   useEffect(() => {
     void refreshProjects(1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const refreshHealth = async () => {
+      try {
+        const health = await getSystemHealth()
+        if (!cancelled) {
+          setSystemHealth(health)
+        }
+      } catch {
+        if (!cancelled) {
+          setSystemHealth(null)
+        }
+      }
+    }
+
+    void refreshHealth()
+    const intervalId = window.setInterval(() => {
+      void refreshHealth()
+    }, 15_000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
   }, [])
 
   useEffect(() => {
@@ -836,6 +936,23 @@ export function EcolmsDashboard() {
     course_content: "Создать материалы",
     course_test: "Создать тест",
   }
+  const overallHealthStatus: ServiceHealthStatus = systemHealth?.status ?? "unknown"
+  const serviceEntries: Array<{
+    key: keyof SystemHealthRecord["services"]
+    title: string
+    state: ServiceHealthState | null
+  }> = [
+    { key: "api", title: "API", state: systemHealth?.services.api ?? null },
+    { key: "postgres", title: "Postgres", state: systemHealth?.services.postgres ?? null },
+    { key: "redis", title: "Redis", state: systemHealth?.services.redis ?? null },
+    { key: "openai", title: "OpenAI", state: systemHealth?.services.openai ?? null },
+    { key: "worker", title: "Worker", state: systemHealth?.services.worker ?? null },
+    {
+      key: "transcriptionService",
+      title: "Transcription Service",
+      state: systemHealth?.services.transcriptionService ?? null,
+    },
+  ]
 
   function isGenerateDisabled(stage: GenerationStage) {
     if (stage === "course_outline") {
@@ -877,7 +994,58 @@ export function EcolmsDashboard() {
                 Конструктор обучающих курсов
               </h1>
             </div>
-            <div />
+            <HoverCard>
+              <HoverCardTrigger
+                render={
+                  <button
+                    type="button"
+                    className={cn(
+                      "inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm",
+                      serviceStatusBadgeClass(overallHealthStatus)
+                    )}
+                  />
+                }
+              >
+                {serviceStatusIcon(overallHealthStatus)}
+                <span>Сервисы: {serviceStatusLabel(overallHealthStatus)}</span>
+              </HoverCardTrigger>
+              <HoverCardContent align="end" side="bottom" className="min-w-80 max-w-96 space-y-3">
+                <div className="space-y-1">
+                  <div className="text-sm font-semibold">Доступность сервисов</div>
+                  <div className="text-xs text-muted-foreground">
+                    Обновлено: {systemHealth ? formatDateLabel(systemHealth.timestamp) : "нет данных"}
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  {serviceEntries.map((entry) => {
+                    const state = entry.state
+                    const status = state?.status ?? "unknown"
+                    return (
+                      <div
+                        key={entry.key}
+                        className="flex items-start justify-between gap-3 rounded-md border border-border/70 bg-card px-3 py-2"
+                      >
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex items-center gap-2">
+                            {serviceKindIcon(entry.key)}
+                            <span className="text-sm font-medium">{entry.title}</span>
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {state?.details ?? "Нет данных"}
+                          </div>
+                        </div>
+                        <Badge
+                          variant="outline"
+                          className={cn("shrink-0", serviceStatusBadgeClass(status))}
+                        >
+                          {serviceStatusLabel(status)}
+                        </Badge>
+                      </div>
+                    )
+                  })}
+                </div>
+              </HoverCardContent>
+            </HoverCard>
           </header>
 
           {listError ? (

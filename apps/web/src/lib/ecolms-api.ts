@@ -170,6 +170,32 @@ export interface DownloadItem {
   downloadUrl: string
 }
 
+export type ServiceHealthStatus = "up" | "down" | "degraded" | "unknown"
+
+export interface ServiceHealthState {
+  status: ServiceHealthStatus
+  details: string
+  checkedAt: string
+}
+
+export interface SystemHealthRecord {
+  status: ServiceHealthStatus
+  service: "api"
+  timestamp: string
+  services: {
+    api: ServiceHealthState
+    postgres: ServiceHealthState
+    redis: ServiceHealthState
+    openai: ServiceHealthState
+    worker: ServiceHealthState
+    transcriptionService: ServiceHealthState
+  }
+  stats: {
+    projects: number
+    uploads: number
+  }
+}
+
 const DEFAULT_HEADERS = {
   "content-type": "application/json",
 }
@@ -266,6 +292,10 @@ export async function generateStage(
 
 export async function getProjectStatus(projectId: string) {
   return requestJson<ProjectStatusRecord>(`/api/projects/${projectId}/status`)
+}
+
+export async function getSystemHealth() {
+  return requestJson<SystemHealthRecord>(`/api/health`)
 }
 
 export async function initUpload(
