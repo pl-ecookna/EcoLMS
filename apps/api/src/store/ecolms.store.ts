@@ -158,12 +158,12 @@ function makeNameFromGithubRef(githubRef: string) {
   return last.replace(/[-_]+/g, " ").trim()
 }
 
-function buildDrafts(name: string, topic: string): Record<StageId, string> {
+function buildDrafts(_name: string, _topic: string): Record<StageId, string> {
   return {
-    source_compiled: `# ${name}\n\n## Что уже известно\n- ${topic}\n- Совмещаем видео и документы в одном проекте.\n- Итог хранится только в S3.\n\n## Что удаляем\n- контакты, если они не нужны для обучения;\n- рекламный шум;\n- повторы из вебинаров.\n`,
-    course_outline: `# План курса\n\n1. Введение в ${topic}\n2. Ключевые материалы\n3. Практика и примеры\n4. Типовые ошибки\n5. Проверка понимания\n`,
-    course_content: `# Обучающие материалы\n\n## Раздел 1. Введение\nКратко объясняем, зачем нужен материал и кому он адресован.\n\n## Раздел 2. Практика\nДаём пошаговые инструкции без жаргона и лишних деталей.\n`,
-    course_test: `# Тест\n\n1. Какой шаг следует после source_compiled?\n   - План курса\n   - Список файлов\n   - Архив проекта\n2. Сколько вопросов должно быть в тесте?\n   - 5\n   - 10\n   - 15\n`,
+    source_compiled: "",
+    course_outline: "",
+    course_content: "",
+    course_test: "",
   }
 }
 
