@@ -1819,14 +1819,14 @@ export function EcolmsDashboard() {
       </Sheet>
 
       <Sheet open={sourcePreviewOpen} onOpenChange={setSourcePreviewOpen}>
-        <SheetContent className="w-full gap-0 sm:max-w-[980px]">
+        <SheetContent className="flex h-full w-full flex-col gap-0 sm:max-w-[980px]">
           <SheetHeader className="border-b">
             <SheetTitle>Структурированный источник</SheetTitle>
             <SheetDescription>
               Курс: {sourcePreviewProjectName || "Без названия"}
             </SheetDescription>
           </SheetHeader>
-          <ScrollArea className="flex-1">
+          <ScrollArea className="min-h-0 flex-1">
             <div className="p-4">
               {sourcePreviewLoading ? (
                 <div className="space-y-3">

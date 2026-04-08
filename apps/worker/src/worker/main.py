@@ -493,6 +493,104 @@ def analyze_source_with_llm(
     raise RuntimeError(f"Все LLM-провайдеры завершились ошибкой: {details}")
 
 
+def stage_input_stage(stage: str) -> str | None:
+    if stage == "course_outline":
+        return "source_compiled"
+    if stage == "course_content":
+        return "course_outline"
+    if stage == "course_test":
+        return "course_content"
+    return None
+
+
+def generate_stage_markdown_with_llm(
+    config: WorkerConfig,
+    *,
+    stage: str,
+    source_text: str,
+    project_name: str,
+) -> dict[str, Any]:
+    prompt_keys = [item.key for item in prompt_bundle_for_stage(stage)]
+    prompt_key = next((key for key in prompt_keys if key.startswith("generate_")), None)
+    if not prompt_key:
+        raise RuntimeError(f"Для этапа {stage} не найден prompt генерации.")
+    prompt = PROMPTS[prompt_key].text
+    normalized_source = source_text.strip()
+    if not normalized_source:
+        raise RuntimeError(f"Невозможно вызвать LLM для {stage}: пустой источник.")
+
+    user_payload = {
+        "task": (
+            "Сгенерируй итоговый markdown для этапа курса. "
+            "Используй только данные из sourceText, без выдуманных деталей."
+        ),
+        "projectName": project_name,
+        "stage": stage,
+        "sourceText": normalized_source[:180000],
+        "outputFormat": {"type": "json", "fields": ["markdown", "shortSummary"]},
+    }
+    messages = [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+    ]
+
+    available_providers: list[str] = []
+    if config.openai_api_key.strip():
+        available_providers.append("openai")
+    if config.openrouter_api_key.strip():
+        available_providers.append("openrouter")
+    if not available_providers:
+        raise RuntimeError("OPENAI_API_KEY или OPENROUTER_API_KEY не заданы.")
+
+    primary = config.llm_primary_provider
+    if primary not in ("openai", "openrouter"):
+        primary = "openai"
+    ordered = [primary, "openrouter" if primary == "openai" else "openai"]
+    ordered = [provider for provider in ordered if provider in available_providers]
+
+    attempts: list[dict[str, Any]] = []
+    for provider in ordered:
+        try:
+            if provider == "openai":
+                content, model_name = openai_chat_completion(
+                    config.openai_api_key,
+                    config.openai_model,
+                    messages,
+                    config.llm_timeout_seconds,
+                )
+            else:
+                content, model_name = openrouter_chat_completion(
+                    config.openrouter_api_key,
+                    config.openrouter_base_url,
+                    config.openrouter_model,
+                    messages,
+                    config.llm_timeout_seconds,
+                )
+            parsed = parse_json_from_text(content)
+            markdown = str(
+                parsed.get("markdown") or parsed.get("content") or parsed.get("text") or ""
+            ).strip()
+            short_summary = str(parsed.get("shortSummary") or "").strip()
+            if not markdown:
+                raise RuntimeError("LLM вернул пустое поле markdown.")
+            return {
+                "markdown": markdown,
+                "shortSummary": short_summary,
+                "provider": provider,
+                "model": model_name,
+                "attempts": attempts + [{"provider": provider, "ok": True}],
+                "sourceTextLength": len(normalized_source),
+                "promptKey": prompt_key,
+            }
+        except Exception as exc:
+            attempts.append({"provider": provider, "ok": False, "error": str(exc)})
+
+    details = "; ".join(
+        f"{item['provider']}: {item['error']}" for item in attempts if not item["ok"]
+    )
+    raise RuntimeError(f"Все LLM-провайдеры завершились ошибкой: {details}")
+
+
 def stage_prompt_metadata(stage: str) -> dict[str, Any]:
     prompts = prompt_bundle_for_stage(stage)
     return {
@@ -574,6 +672,24 @@ def load_project(conn: psycopg.Connection, project_id: str) -> dict[str, Any]:
     if row is None:
         raise RuntimeError(f"Project not found: {project_id}")
     return dict(row)
+
+
+def load_artifact_markdown(conn: psycopg.Connection, project_id: str, stage: str) -> str:
+    row = conn.execute(
+        """
+        select content_md
+        from artifacts
+        where project_id = %s and stage = %s and format = 'md'
+        limit 1
+        """,
+        (project_id, stage),
+    ).fetchone()
+    if row is None:
+        return ""
+    content = row[0]
+    if not isinstance(content, str):
+        return ""
+    return content.strip()
 
 
 def load_source_files(conn: psycopg.Connection, project_id: str) -> list[dict[str, Any]]:
@@ -912,6 +1028,7 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
         project = load_project(conn, job["project_id"])
         transcription_data: dict[str, Any] | None = None
         llm_data: dict[str, Any] | None = None
+        llm_stage_data: dict[str, Any] | None = None
         llm_documents: list[dict[str, Any]] = []
         source_file: dict[str, Any] | None = None
         topic_for_markdown = project["source_summary"]
@@ -994,8 +1111,27 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
                         topic_fragments.append(document_summary)
             if topic_fragments:
                 topic_for_markdown = "\n\n".join(topic_fragments)
+        else:
+            input_stage = stage_input_stage(job["stage"])
+            previous_artifact = (
+                load_artifact_markdown(conn, project["id"], input_stage) if input_stage else ""
+            )
+            source_for_stage = previous_artifact or str(project.get("source_summary") or "")
+            if source_for_stage.strip():
+                llm_stage_data = generate_stage_markdown_with_llm(
+                    config,
+                    stage=job["stage"],
+                    source_text=source_for_stage,
+                    project_name=str(project["name"]),
+                )
+                topic_for_markdown = (
+                    str(llm_stage_data.get("shortSummary") or "").strip()
+                    or extract_summary(source_for_stage)
+                )
 
-        markdown = make_stage_markdown(project["name"], job["stage"], topic_for_markdown)
+        markdown = str(llm_stage_data.get("markdown") or "").strip() if llm_stage_data else ""
+        if not markdown:
+            markdown = make_stage_markdown(project["name"], job["stage"], topic_for_markdown)
         payload = job.get("payload_json") or {}
         if isinstance(payload, str):
             payload = json.loads(payload)
@@ -1022,6 +1158,16 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
             }
         if llm_documents:
             stage_metadata["llmDocuments"] = llm_documents
+        if llm_stage_data is not None:
+            stage_metadata["llmStageGeneration"] = {
+                "provider": llm_stage_data.get("provider"),
+                "model": llm_stage_data.get("model"),
+                "attempts": llm_stage_data.get("attempts"),
+                "promptKey": llm_stage_data.get("promptKey"),
+                "sourceTextLength": llm_stage_data.get("sourceTextLength"),
+                "markdownLength": len(str(llm_stage_data.get("markdown") or "")),
+                "shortSummaryLength": len(str(llm_stage_data.get("shortSummary") or "")),
+            }
         auto_generate_all = bool(payload.get("autoGenerateAll"))
         queued_next_stage = payload.get("nextStage")
         if queued_next_stage is not None and not isinstance(queued_next_stage, str):
