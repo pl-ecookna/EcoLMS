@@ -629,6 +629,48 @@ def load_job(conn: psycopg.Connection, job_id: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def recover_missing_job(
+    conn: psycopg.Connection, job_message: dict[str, Any]
+) -> dict[str, Any] | None:
+    job_id = str(job_message.get("jobId") or "").strip()
+    project_id = str(job_message.get("projectId") or "").strip()
+    stage = str(job_message.get("stage") or "").strip()
+    trigger = str(job_message.get("trigger") or "auto").strip() or "auto"
+
+    if not job_id or not project_id or not stage:
+        return None
+
+    if stage not in PROMPTS:
+        return None
+
+    conn.execute(
+        """
+        insert into processing_jobs (
+          id, project_id, stage, status, payload_json, result_json, error_text, started_at, finished_at, created_at
+        ) values (
+          %s, %s, %s, 'queued', %s::jsonb, null, null, null, null, now()
+        )
+        on conflict (id) do nothing
+        """,
+        (
+            job_id,
+            project_id,
+            stage,
+            json.dumps(
+                {
+                    "stage": stage,
+                    "trigger": trigger,
+                    "promptKeys": prompt_bundle_for_stage(stage),
+                    "autoGenerateAll": trigger == "auto",
+                    "nextStage": None,
+                },
+                ensure_ascii=False,
+            ),
+        ),
+    )
+    return load_job(conn, job_id)
+
+
 def append_project_log(conn: psycopg.Connection, project_id: str, message: str) -> None:
     row = conn.execute(
         "select logs from projects where id = %s limit 1",
@@ -698,6 +740,26 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
     conn = psycopg.connect(config.postgres_url, row_factory=dict_row)
     try:
         job = load_job(conn, job_message["jobId"])
+        if job is None:
+            try:
+                with conn.transaction():
+                    recovered = recover_missing_job(conn, job_message)
+                if recovered is not None:
+                    job = recovered
+                    print(
+                        json.dumps(
+                            {
+                                "service": "worker",
+                                "status": "recovered",
+                                "reason": "job-created-from-queue-message",
+                                "jobId": job_message["jobId"],
+                            },
+                            ensure_ascii=False,
+                        )
+                    )
+            except Exception:
+                recovered = None
+
         if job is None:
             print(
                 json.dumps(
