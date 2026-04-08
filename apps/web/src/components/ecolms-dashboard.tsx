@@ -3,12 +3,13 @@
 import { useEffect, useRef, useState, type DragEvent } from "react"
 import {
   AlertCircleIcon,
-  FileTextIcon,
+  PencilIcon,
   Loader2Icon,
   MoreHorizontalIcon,
   PlusIcon,
   SaveIcon,
   SparklesIcon,
+  WandSparklesIcon,
   Trash2Icon,
   UploadIcon,
   XIcon,
@@ -248,6 +249,8 @@ export function EcolmsDashboard() {
 
   const totalPages = Math.max(1, Math.ceil(projectTotal / PAGE_SIZE))
   const currentStageArtifact = getStageArtifact(selectedProject, selectedStage)
+  const currentStageSourceValue = getStageMarkdown(selectedProject, selectedStage)
+  const hasUnsavedChanges = Boolean(currentStageArtifact) && editorValue !== currentStageSourceValue
 
   async function refreshProjects(nextPage = page) {
     setListLoading(true)
@@ -325,6 +328,51 @@ export function EcolmsDashboard() {
     }
     setEditorValue(getStageMarkdown(selectedProject, selectedStage))
   }, [selectedProject, selectedStage])
+
+  useEffect(() => {
+    if (!hasUnsavedChanges) {
+      return
+    }
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ""
+    }
+
+    window.addEventListener("beforeunload", handleBeforeUnload)
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload)
+  }, [hasUnsavedChanges])
+
+  function confirmDiscardUnsavedChanges() {
+    if (!hasUnsavedChanges) {
+      return true
+    }
+    return window.confirm("Есть несохранённые изменения. Выйти без сохранения?")
+  }
+
+  function handleSelectProject(projectId: string) {
+    if (projectId === selectedId) {
+      return true
+    }
+    if (!confirmDiscardUnsavedChanges()) {
+      return false
+    }
+    setSelectedId(projectId)
+    setIsEditing(false)
+    return true
+  }
+
+  function handleSelectStage(stage: GenerationStage) {
+    if (stage === selectedStage) {
+      return true
+    }
+    if (!confirmDiscardUnsavedChanges()) {
+      return false
+    }
+    setSelectedStage(stage)
+    setIsEditing(false)
+    return true
+  }
 
   function resetUploadState() {
     setUploadPhase("idle")
@@ -518,7 +566,7 @@ export function EcolmsDashboard() {
   }
 
   async function handleSaveDraft() {
-    if (!selectedProject || !currentStageArtifact) {
+    if (!selectedProject || !currentStageArtifact || !hasUnsavedChanges) {
       return
     }
 
@@ -556,6 +604,10 @@ export function EcolmsDashboard() {
   }
 
   async function handleGenerateAllForProject(projectId: string) {
+    if (!confirmDiscardUnsavedChanges()) {
+      return
+    }
+
     setMutating(true)
     setListError(null)
     try {
@@ -676,6 +728,22 @@ export function EcolmsDashboard() {
     return !canGenerateTest || mutating
   }
 
+  function getGenerateBlockedReason(stage: GenerationStage) {
+    if (mutating) {
+      return "Дождитесь завершения текущей операции."
+    }
+    if (stage === "course_outline" && !canGenerateOutline) {
+      return "Сначала загрузите исходные файлы курса."
+    }
+    if (stage === "course_content" && !canGenerateContent) {
+      return "Сначала создайте план курса."
+    }
+    if (stage === "course_test" && !canGenerateTest) {
+      return "Сначала создайте обучающие материалы."
+    }
+    return null
+  }
+
   return (
     <>
       <div className="min-h-screen bg-background">
@@ -736,7 +804,7 @@ export function EcolmsDashboard() {
                                 ? "border-primary/35 bg-muted/30"
                                 : "border-border/70 bg-card"
                             )}
-                            onClick={() => setSelectedId(project.id)}
+                            onClick={() => handleSelectProject(project.id)}
                           >
                             <div className="flex items-start justify-between gap-3">
                               <div className="min-w-0 space-y-1">
@@ -760,26 +828,51 @@ export function EcolmsDashboard() {
                                   <span className="sr-only">Действия курса</span>
                                   <MoreHorizontalIcon className="size-4" />
                                 </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end">
+                                <DropdownMenuContent align="end" className="min-w-72 max-w-72">
                                   <DropdownMenuItem
                                     onClick={() => {
-                                      setSelectedId(project.id)
-                                      setEditOpen(true)
+                                      if (handleSelectProject(project.id)) {
+                                        setEditOpen(true)
+                                      }
                                     }}
+                                    className="items-start gap-3 py-2"
                                   >
-                                    Редактировать
+                                    <PencilIcon className="mt-0.5 size-4" />
+                                    <div className="space-y-0.5">
+                                      <div className="whitespace-nowrap font-medium">
+                                        Редактировать
+                                      </div>
+                                      <div className="text-xs text-muted-foreground">
+                                        Открыть настройки и файлы выбранного курса.
+                                      </div>
+                                    </div>
                                   </DropdownMenuItem>
                                   <DropdownMenuItem
                                     onClick={() => void handleGenerateAllForProject(project.id)}
+                                    className="items-start gap-3 py-2"
                                   >
-                                    Запустить всё автоматически
+                                    <WandSparklesIcon className="mt-0.5 size-4" />
+                                    <div className="space-y-0.5">
+                                      <div className="whitespace-nowrap font-medium">
+                                        Автогенерация
+                                      </div>
+                                      <div className="text-xs text-muted-foreground">
+                                        Последовательно запустить план, материалы и тест.
+                                      </div>
+                                    </div>
                                   </DropdownMenuItem>
                                   <DropdownMenuItem
                                     variant="destructive"
                                     onClick={() => void handleDeleteProject(project)}
+                                    className="items-start gap-3 py-2"
                                   >
-                                    <Trash2Icon data-icon="inline-start" />
-                                    Удалить курс
+                                    <Trash2Icon className="mt-0.5 size-4" />
+                                    <div className="space-y-0.5">
+                                      <div className="whitespace-nowrap font-medium">Удалить</div>
+                                      <div className="text-xs text-muted-foreground">
+                                        Полностью удалить курс и связанные данные.
+                                      </div>
+                                    </div>
                                   </DropdownMenuItem>
                                 </DropdownMenuContent>
                               </DropdownMenu>
@@ -913,8 +1006,7 @@ export function EcolmsDashboard() {
                                     : "border-border/70 bg-card"
                                 )}
                                 onClick={() => {
-                                  setSelectedStage(stage)
-                                  setIsEditing(false)
+                                  handleSelectStage(stage)
                                 }}
                               >
                                 <div className="flex items-start justify-between gap-2">
@@ -936,48 +1028,70 @@ export function EcolmsDashboard() {
                                       </span>
                                       <MoreHorizontalIcon className="size-3.5" />
                                     </DropdownMenuTrigger>
-                                    <DropdownMenuContent align="end">
-                                      <DropdownMenuItem
-                                        onClick={() => {
-                                          setSelectedStage(stage)
-                                          setIsEditing(false)
-                                        }}
-                                      >
-                                        Открыть раздел
-                                      </DropdownMenuItem>
+                                    <DropdownMenuContent align="end" className="min-w-72 max-w-72">
                                       <DropdownMenuItem
                                         disabled={isGenerateDisabled(stage)}
                                         onClick={() => void handleGenerate(stage)}
+                                        className="items-start gap-3 py-2"
                                       >
-                                        <FileTextIcon data-icon="inline-start" />
-                                        {generationLabelByStage[stage]}
+                                        <WandSparklesIcon className="mt-0.5 size-4" />
+                                        <div className="space-y-0.5">
+                                          <div className="whitespace-nowrap font-medium">
+                                            {generationLabelByStage[stage]}
+                                          </div>
+                                          <div className="text-xs text-muted-foreground">
+                                            Запустить генерацию только для этого этапа.
+                                          </div>
+                                        </div>
                                       </DropdownMenuItem>
                                       <DropdownMenuItem
                                         onClick={() => {
-                                          setSelectedStage(stage)
+                                          if (!handleSelectStage(stage)) {
+                                            return
+                                          }
                                           setIsEditing((current) =>
                                             selectedStage === stage ? !current : true
                                           )
                                         }}
+                                        className="items-start gap-3 py-2"
                                       >
-                                        {selectedStage === stage && isEditing
-                                          ? "Просмотр"
-                                          : "Редактировать"}
+                                        <PencilIcon className="mt-0.5 size-4" />
+                                        <div className="space-y-0.5">
+                                          <div className="whitespace-nowrap font-medium">
+                                            {selectedStage === stage && isEditing
+                                              ? "Просмотр"
+                                              : "Редактировать"}
+                                          </div>
+                                          <div className="text-xs text-muted-foreground">
+                                            Переключить режим редактирования текста этапа.
+                                          </div>
+                                        </div>
                                       </DropdownMenuItem>
                                       <DropdownMenuItem
                                         disabled={
                                           mutating ||
                                           stage !== selectedStage ||
-                                          !currentStageArtifact
+                                          !currentStageArtifact ||
+                                          !hasUnsavedChanges
                                         }
                                         onClick={() => {
-                                          setSelectedStage(stage)
+                                          if (!handleSelectStage(stage)) {
+                                            return
+                                          }
                                           setIsEditing(false)
                                           void handleSaveDraft()
                                         }}
+                                        className="items-start gap-3 py-2"
                                       >
-                                        <SaveIcon data-icon="inline-start" />
-                                        Сохранить
+                                        <SaveIcon className="mt-0.5 size-4" />
+                                        <div className="space-y-0.5">
+                                          <div className="whitespace-nowrap font-medium">
+                                            Сохранить
+                                          </div>
+                                          <div className="text-xs text-muted-foreground">
+                                            Сохранить изменения текущего этапа в базе.
+                                          </div>
+                                        </div>
                                       </DropdownMenuItem>
                                     </DropdownMenuContent>
                                   </DropdownMenu>
@@ -999,11 +1113,41 @@ export function EcolmsDashboard() {
                             onChange={(event) => setEditorValue(event.target.value)}
                             className="min-h-[620px] font-mono text-sm"
                           />
-                        ) : (
+                        ) : editorValue.trim() ? (
                           <div className="min-h-[620px] border border-border bg-muted/20 p-4">
                             <pre className="whitespace-pre-wrap text-sm leading-6 text-foreground">
-                              {editorValue || "Пока нет данных для выбранного этапа."}
+                              {editorValue}
                             </pre>
+                          </div>
+                        ) : (
+                          <div className="flex min-h-[620px] items-center justify-center border border-dashed border-border/70 bg-muted/10 p-8 text-center">
+                            <div className="max-w-md space-y-4">
+                              <div className="mx-auto flex size-12 items-center justify-center rounded-full bg-secondary">
+                                <WandSparklesIcon className="size-5 text-muted-foreground" />
+                              </div>
+                              <div className="space-y-1.5">
+                                <h3 className="text-base font-semibold">Результат пока не создан</h3>
+                                <p className="text-sm text-muted-foreground">
+                                  Запустите генерацию для этапа «{stageLabels[selectedStage]}», чтобы
+                                  увидеть текст в этом окне.
+                                </p>
+                              </div>
+                              <div className="space-y-1.5">
+                                <Button
+                                  variant="outline"
+                                  onClick={() => void handleGenerate(selectedStage)}
+                                  disabled={isGenerateDisabled(selectedStage)}
+                                >
+                                  <WandSparklesIcon data-icon="inline-start" />
+                                  {generationLabelByStage[selectedStage]}
+                                </Button>
+                                {isGenerateDisabled(selectedStage) ? (
+                                  <p className="text-xs text-muted-foreground">
+                                    {getGenerateBlockedReason(selectedStage)}
+                                  </p>
+                                ) : null}
+                              </div>
+                            </div>
                           </div>
                         )}
                       </CardContent>
