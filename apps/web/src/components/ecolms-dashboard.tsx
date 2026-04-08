@@ -85,7 +85,6 @@ import {
   deleteSourceFile,
   generateStage,
   getProject,
-  getProjectStatus,
   getSystemHealth,
   initUpload,
   listProjects,
@@ -499,67 +498,49 @@ export function EcolmsDashboard() {
 
   useEffect(() => {
     const projectId = selectedProject?.id
-    if (!projectId || selectedProject?.status !== "processing") {
+    if (!projectId || hasUnsavedChanges) {
       return
     }
 
     let cancelled = false
 
-    const pollStatus = async () => {
+    const pollProject = async () => {
       try {
-        const status = await getProjectStatus(projectId)
+        const detail = await getProject(projectId)
         if (cancelled) {
           return
         }
 
         setProjects((current) =>
           current.map((project) =>
-            project.id === status.id
+            project.id === detail.id
               ? {
                   ...project,
-                  status: status.status,
-                  currentStage: status.currentStage,
-                  progress: status.progress,
-                  updatedAt: status.updatedAt,
+                  status: detail.status,
+                  currentStage: detail.currentStage,
+                  progress: detail.progress,
+                  updatedAt: detail.updatedAt,
+                  stages: detail.stages,
                 }
               : project
           )
         )
-
-        setSelectedProject((current) =>
-          current && current.id === status.id
-            ? {
-                ...current,
-                status: status.status,
-                currentStage: status.currentStage,
-                progress: status.progress,
-                updatedAt: status.updatedAt,
-              }
-            : current
-        )
-
-        if (status.status !== "processing" && !hasUnsavedChanges) {
-          const detail = await getProject(status.id)
-          if (cancelled) {
-            return
-          }
-          setSelectedProject(detail)
-        }
+        setSelectedProject(detail)
       } catch {
         return
       }
     }
 
-    void pollStatus()
+    void pollProject()
     const intervalId = window.setInterval(() => {
-      void pollStatus()
+      void pollProject()
     }, 4000)
 
     return () => {
       cancelled = true
       window.clearInterval(intervalId)
     }
-  }, [hasUnsavedChanges, selectedProject?.id, selectedProject?.status])
+  }, [hasUnsavedChanges, selectedProject?.id])
 
   function confirmDiscardUnsavedChanges() {
     if (!hasUnsavedChanges) {
@@ -1363,15 +1344,6 @@ export function EcolmsDashboard() {
                   <CardContent className="flex-1 space-y-4 p-4">
                     <Card className="flex h-full min-h-[620px] flex-col">
                       <CardHeader className="space-y-4">
-                        {selectedProject.status === "processing" ? (
-                          <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
-                            <Loader2Icon className="size-4 animate-spin" />
-                            <span>
-                              Идёт генерация: {stageLabels[selectedProject.currentStage]}. Обновляем
-                              статус автоматически.
-                            </span>
-                          </div>
-                        ) : null}
                         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                           {VISIBLE_STAGES.map((stage) => {
                             const stageStatus =
@@ -1484,8 +1456,20 @@ export function EcolmsDashboard() {
                                   </DropdownMenu>
                                 </div>
                                 <div className="mt-3 flex items-center justify-between gap-2">
-                                  <Badge variant={stageStatus === "done" ? "default" : "outline"}>
-                                    {stageStatus === "done" ? "Готов" : "Ожидает"}
+                                  <Badge
+                                    variant={
+                                      stageStatus === "done"
+                                        ? "default"
+                                        : stageStatus === "processing"
+                                          ? "secondary"
+                                          : "outline"
+                                    }
+                                  >
+                                    {stageStatus === "done"
+                                      ? "Готов"
+                                      : stageStatus === "processing"
+                                        ? "В обработке"
+                                        : "Ожидает"}
                                   </Badge>
                                 </div>
                               </button>
