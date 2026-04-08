@@ -14,6 +14,8 @@ import {
   UploadIcon,
   XIcon,
 } from "lucide-react"
+import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -217,6 +219,43 @@ function sourceFileStatusLabel(status: string) {
   }
 }
 
+function MarkdownContent({ value }: { value: string }) {
+  return (
+    <div className="text-sm leading-6 text-foreground">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          h1: ({ children }) => <h1 className="mb-4 text-2xl font-semibold">{children}</h1>,
+          h2: ({ children }) => <h2 className="mb-3 mt-6 text-xl font-semibold">{children}</h2>,
+          h3: ({ children }) => <h3 className="mb-2 mt-5 text-lg font-semibold">{children}</h3>,
+          p: ({ children }) => <p className="mb-3">{children}</p>,
+          ul: ({ children }) => <ul className="mb-3 list-disc space-y-1 pl-6">{children}</ul>,
+          ol: ({ children }) => <ol className="mb-3 list-decimal space-y-1 pl-6">{children}</ol>,
+          li: ({ children }) => <li>{children}</li>,
+          blockquote: ({ children }) => (
+            <blockquote className="mb-3 border-l-2 border-border pl-3 text-muted-foreground">
+              {children}
+            </blockquote>
+          ),
+          hr: () => <hr className="my-4 border-border" />,
+          code: ({ children }) => (
+            <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[0.9em]">
+              {children}
+            </code>
+          ),
+          pre: ({ children }) => (
+            <pre className="mb-3 overflow-x-auto rounded border bg-muted/40 p-3 font-mono text-xs leading-5">
+              {children}
+            </pre>
+          ),
+        }}
+      >
+        {value}
+      </ReactMarkdown>
+    </div>
+  )
+}
+
 export function EcolmsDashboard() {
   const [projects, setProjects] = useState<ProjectRecord[]>([])
   const [projectTotal, setProjectTotal] = useState(0)
@@ -265,14 +304,16 @@ export function EcolmsDashboard() {
       if (response.items.length === 0) {
         setSelectedId(null)
         setSelectedProject(null)
-        return
+        return response
       }
 
       if (!selectedId || !response.items.some((project) => project.id === selectedId)) {
         setSelectedId(response.items[0]?.id ?? null)
       }
+      return response
     } catch (error) {
       setListError(error instanceof Error ? error.message : "Не удалось загрузить курсы")
+      return null
     } finally {
       setListLoading(false)
     }
@@ -597,7 +638,15 @@ export function EcolmsDashboard() {
     try {
       await deleteProject(targetProject.id)
       setIsEditing(false)
-      await refreshProjects(page)
+      const refreshed = await refreshProjects(page)
+
+      if (targetProject.id === selectedId) {
+        const topProjectId = refreshed?.items[0]?.id ?? null
+        setSelectedId(topProjectId)
+        if (!topProjectId) {
+          setSelectedProject(null)
+        }
+      }
     } finally {
       setMutating(false)
     }
@@ -1115,9 +1164,7 @@ export function EcolmsDashboard() {
                           />
                         ) : editorValue.trim() ? (
                           <div className="min-h-[620px] border border-border bg-muted/20 p-4">
-                            <pre className="whitespace-pre-wrap text-sm leading-6 text-foreground">
-                              {editorValue}
-                            </pre>
+                            <MarkdownContent value={editorValue} />
                           </div>
                         ) : (
                           <div className="flex min-h-[620px] items-center justify-center border border-dashed border-border/70 bg-muted/10 p-8 text-center">
