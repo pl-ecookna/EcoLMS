@@ -493,14 +493,31 @@ def analyze_source_with_llm(
     raise RuntimeError(f"Все LLM-провайдеры завершились ошибкой: {details}")
 
 
-def stage_input_stage(stage: str) -> str | None:
+def stage_input_stages(stage: str) -> list[str]:
     if stage == "course_outline":
-        return "source_compiled"
+        return ["source_compiled"]
     if stage == "course_content":
-        return "course_outline"
+        return ["source_compiled", "course_outline"]
     if stage == "course_test":
-        return "course_content"
-    return None
+        return ["source_compiled", "course_content"]
+    return []
+
+
+def build_stage_generation_input(
+    conn: psycopg.Connection, project_id: str, stage: str, fallback_summary: str
+) -> tuple[str, list[str]]:
+    stages = stage_input_stages(stage)
+    parts: list[str] = []
+    used_stages: list[str] = []
+    for source_stage in stages:
+        markdown = load_artifact_markdown(conn, project_id, source_stage)
+        if not markdown:
+            continue
+        parts.append(f"### {source_stage}\n{markdown}")
+        used_stages.append(source_stage)
+    if parts:
+        return "\n\n".join(parts).strip(), used_stages
+    return fallback_summary.strip(), used_stages
 
 
 def generate_stage_markdown_with_llm(
@@ -1030,6 +1047,7 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
         llm_data: dict[str, Any] | None = None
         llm_stage_data: dict[str, Any] | None = None
         llm_documents: list[dict[str, Any]] = []
+        llm_stage_input_stages: list[str] = []
         source_file: dict[str, Any] | None = None
         topic_for_markdown = project["source_summary"]
         if job["stage"] == "source_compiled":
@@ -1112,11 +1130,12 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
             if topic_fragments:
                 topic_for_markdown = "\n\n".join(topic_fragments)
         else:
-            input_stage = stage_input_stage(job["stage"])
-            previous_artifact = (
-                load_artifact_markdown(conn, project["id"], input_stage) if input_stage else ""
+            source_for_stage, llm_stage_input_stages = build_stage_generation_input(
+                conn,
+                project["id"],
+                job["stage"],
+                str(project.get("source_summary") or ""),
             )
-            source_for_stage = previous_artifact or str(project.get("source_summary") or "")
             if source_for_stage.strip():
                 llm_stage_data = generate_stage_markdown_with_llm(
                     config,
@@ -1165,6 +1184,7 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
                 "attempts": llm_stage_data.get("attempts"),
                 "promptKey": llm_stage_data.get("promptKey"),
                 "sourceTextLength": llm_stage_data.get("sourceTextLength"),
+                "inputStages": llm_stage_input_stages,
                 "markdownLength": len(str(llm_stage_data.get("markdown") or "")),
                 "shortSummaryLength": len(str(llm_stage_data.get("shortSummary") or "")),
             }
