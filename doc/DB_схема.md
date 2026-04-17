@@ -1,96 +1,135 @@
-# Схема базы данных (PostgreSQL)
+# Схема базы данных
 
-Эта схема отражает минимальный набор сущностей для MVP.
+Документ отражает текущую схему, которую сервис создаёт в [apps/api/src/db/postgres.service.ts](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/apps/api/src/db/postgres.service.ts).
 
----
+## Таблица `projects`
 
-## Таблица: projects
+- `id` `text`, PK
+- `name` `text`
+- `github_ref` `text`
+- `source_summary` `text`
+- `status` `text`
+- `current_stage` `text`
+- `progress` `integer`
+- `files` `integer`
+- `updated_at` `timestamptz`
+- `overview` `text`
+- `stage_drafts` `jsonb`
+- `logs` `jsonb`
+- `created_at` `timestamptz`
 
-- id (uuid, PK)
-- name (text)
-- status (text)
-- current_stage (text)
-- created_at (timestamp)
-- updated_at (timestamp)
+Допустимые `status`:
 
-## Таблица: source_files
+- `draft`
+- `uploaded`
+- `processing`
+- `awaiting_review`
+- `completed`
+- `failed`
 
-- id (uuid, PK)
-- project_id (uuid, FK)
-- original_name (text)
-- mime_type (text)
-- size_bytes (bigint)
-- storage_key (text)
-- upload_status (text)
-- processing_status (text)
-- kind (text)
-- position (int)
-- created_at (timestamp)
+Допустимые `current_stage`:
 
-## Таблица: upload_sessions
+- `source_compiled`
+- `course_outline`
+- `course_content`
+- `course_test`
 
-- id (uuid, PK)
-- project_id (uuid, FK)
-- source_file_id (uuid, FK)
-- s3_upload_id (text)
-- status (text)
-- created_at (timestamp)
-- completed_at (timestamp)
+## Таблица `source_files`
 
-## Таблица: processing_jobs
+- `id` `text`, PK
+- `project_id` `text`, FK -> `projects.id`
+- `original_name` `text`
+- `mime_type` `text`
+- `size_bytes` `bigint`
+- `storage_key` `text`
+- `upload_status` `text`
+- `processing_status` `text`
+- `kind` `text`
+- `position` `integer`
+- `created_at` `timestamptz`
 
-- id (uuid, PK)
-- project_id (uuid, FK)
-- stage (text)
-- status (text)
-- payload_json (jsonb)
-- result_json (jsonb)
-- error_text (text)
-- started_at (timestamp)
-- finished_at (timestamp)
-- created_at (timestamp)
+Допустимые `upload_status`:
 
-## Таблица: artifacts
+- `initiated`
+- `uploading`
+- `completed`
+- `aborted`
 
-- id (uuid, PK)
-- project_id (uuid, FK)
-- stage (text)
-- format (text)
-- storage_key (text)
-- created_at (timestamp)
+Допустимые `processing_status`:
 
-## Таблица: stage_reviews
+- `pending`
+- `queued`
+- `processing`
+- `done`
+- `failed`
 
-- id (uuid, PK)
-- project_id (uuid, FK)
-- stage (text)
-- source_artifact_id (uuid, FK)
-- edited_artifact_id (uuid, FK)
-- approved_at (timestamp)
+## Таблица `upload_sessions`
 
----
+- `id` `text`, PK
+- `project_id` `text`, FK -> `projects.id`
+- `source_file_id` `text`, FK -> `source_files.id`
+- `s3_upload_id` `text`
+- `status` `text`
+- `created_at` `timestamptz`
+- `completed_at` `timestamptz`, nullable
+- `bucket` `text`
+- `storage_key` `text`
+- `original_name` `text`
+- `mime_type` `text`
+- `size_bytes` `bigint`
+- `kind` `text`
 
-## Канонические статусы jobs
+## Таблица `processing_jobs`
 
-- queued
-- processing
-- done
-- failed
+- `id` `text`, PK
+- `project_id` `text`, FK -> `projects.id`
+- `stage` `text`
+- `status` `text`
+- `payload_json` `jsonb`
+- `result_json` `jsonb`, nullable
+- `error_text` `text`, nullable
+- `started_at` `timestamptz`, nullable
+- `finished_at` `timestamptz`, nullable
+- `created_at` `timestamptz`
 
----
+Допустимые `stage`:
 
-## Канонические статусы проектов
+- `source_compiled`
+- `course_outline`
+- `course_content`
+- `course_test`
 
-- draft
-- uploaded
-- processing
-- awaiting_review
-- completed
-- failed
+Допустимые `status`:
 
----
+- `queued`
+- `processing`
+- `done`
+- `failed`
 
-## Замечания
+## Таблица `artifacts`
 
-- Таблица `users` не требуется для MVP, так как приложение внутреннее и работает без аутентификации.
-- Большие итоговые данные не хранятся в PostgreSQL, в БД сохраняются только метаданные и ссылки на S3.
+- `id` `text`, PK
+- `project_id` `text`, FK -> `projects.id`
+- `stage` `text`
+- `format` `text`
+- `storage_key` `text`
+- `content_md` `text`
+- `content_json` `jsonb`
+- `created_at` `timestamptz`
+- `updated_at` `timestamptz`
+
+Ограничения:
+
+- `format` может быть только `md` или `json`
+- есть `UNIQUE (project_id, stage, format)`
+
+## Таблица `stage_reviews`
+
+- `id` `text`, PK
+- `project_id` `text`, FK -> `projects.id`
+- `stage` `text`
+- `source_artifact_id` `text`, FK -> `artifacts.id`
+- `edited_artifact_id` `text`, FK -> `artifacts.id`
+- `approved_at` `timestamptz`
+
+Примечание: таблица уже есть в схеме и используется store-слоем, но отдельный HTTP endpoint подтверждения этапа пока не опубликован.

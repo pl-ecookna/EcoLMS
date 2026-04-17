@@ -146,6 +146,14 @@ const VISIBLE_STAGES: GenerationStage[] = [
 
 type UploadPhase = "idle" | "uploading" | "done" | "error"
 type UploadContext = "create" | "detail" | null
+type UiAlertType = "success" | "error" | "info"
+
+type UiAlert = {
+  id: string
+  type: UiAlertType
+  title: string
+  description?: string
+}
 
 function projectStatusBadgeVariant(
   status: ProjectStatus
@@ -392,11 +400,24 @@ export function EcolmsDashboard() {
   const [sourcePreviewError, setSourcePreviewError] = useState<string | null>(null)
   const [sourcePreviewProjectName, setSourcePreviewProjectName] = useState("")
   const [sourcePreviewContent, setSourcePreviewContent] = useState("")
+  const [alerts, setAlerts] = useState<UiAlert[]>([])
 
   const totalPages = Math.max(1, Math.ceil(projectTotal / PAGE_SIZE))
   const currentStageArtifact = getStageArtifact(selectedProject, selectedStage)
   const currentStageSourceValue = getStageMarkdown(selectedProject, selectedStage)
   const hasUnsavedChanges = Boolean(currentStageArtifact) && editorValue !== currentStageSourceValue
+
+  function dismissAlert(id: string) {
+    setAlerts((current) => current.filter((item) => item.id !== id))
+  }
+
+  function notify(type: UiAlertType, title: string, description?: string) {
+    const id = crypto.randomUUID()
+    setAlerts((current) => [...current, { id, type, title, description }])
+    window.setTimeout(() => {
+      dismissAlert(id)
+    }, 5000)
+  }
 
   async function refreshProjects(nextPage = page) {
     setListLoading(true)
@@ -725,11 +746,19 @@ export function EcolmsDashboard() {
       setUploadMessage("Файлы загружены")
       await refreshProjects(nextPage)
       await refreshProject(projectId)
+      notify(
+        "success",
+        "Файлы загружены",
+        files.length === 1
+          ? `Добавлен файл: ${files[0]?.name ?? "файл"}.`
+          : `Добавлено файлов: ${files.length}.`
+      )
     } catch (error) {
       setUploadPhase("error")
-      setUploadMessage(
+      const message =
         error instanceof Error ? error.message : "Не удалось загрузить файлы"
-      )
+      setUploadMessage(message)
+      notify("error", "Ошибка загрузки файлов", message)
       throw error
     }
   }
@@ -766,8 +795,12 @@ export function EcolmsDashboard() {
       setCreateDropActive(false)
       setCreateOpen(false)
       resetUploadState()
+      notify("success", "Курс создан", `Курс «${created.name}» успешно создан.`)
     } catch (error) {
-      setListError(error instanceof Error ? error.message : "Не удалось создать курс")
+      const message =
+        error instanceof Error ? error.message : "Не удалось создать курс"
+      setListError(message)
+      notify("error", "Ошибка создания курса", message)
     } finally {
       setMutating(false)
     }
@@ -796,6 +829,7 @@ export function EcolmsDashboard() {
       await updateArtifact(selectedProject.id, currentStageArtifact.id, editorValue)
       await refreshProjects(page)
       await refreshProject(selectedProject.id)
+      notify("success", "Изменения сохранены", `Этап «${stageLabels[selectedStage]}» обновлён.`)
     } finally {
       setMutating(false)
     }
@@ -817,6 +851,7 @@ export function EcolmsDashboard() {
     setMutating(true)
     try {
       await deleteProject(targetProject.id)
+      notify("success", "Курс удалён", `Курс «${targetProject.name}» удалён.`)
       setIsEditing(false)
       const refreshed = await refreshProjects(page)
 
@@ -866,7 +901,9 @@ export function EcolmsDashboard() {
       const projectDetail = await getProject(projectId)
 
       if (!projectDetail.sourceFiles.length) {
-        setListError("Нельзя запустить авто-генерацию: сначала загрузите файлы курса.")
+        const message = "Нельзя запустить авто-генерацию: сначала загрузите файлы курса."
+        setListError(message)
+        notify("error", "Автогенерация не запущена", message)
         return
       }
 
@@ -881,8 +918,12 @@ export function EcolmsDashboard() {
       setSelectedId(projectId)
       setIsEditing(false)
       setSelectedStage("source_compiled")
+      notify("info", "Автогенерация запущена", "Запущена последовательная генерация этапов.")
     } catch (error) {
-      setListError(error instanceof Error ? error.message : "Не удалось запустить генерацию")
+      const message =
+        error instanceof Error ? error.message : "Не удалось запустить генерацию"
+      setListError(message)
+      notify("error", "Ошибка запуска автогенерации", message)
     } finally {
       setGeneratingStage(null)
       setMutating(false)
@@ -898,6 +939,7 @@ export function EcolmsDashboard() {
       await updateProject(selectedProject.id, { note: regenerationContext })
       await refreshProjects(page)
       await refreshProject(selectedProject.id)
+      notify("success", "Контекст сохранён")
     } finally {
       setMutating(false)
     }
@@ -917,6 +959,7 @@ export function EcolmsDashboard() {
       await deleteSourceFile(selectedProject.id, sourceFileId)
       await refreshProjects(page)
       await refreshProject(selectedProject.id)
+      notify("success", "Файл удалён из курса")
     } finally {
       setMutating(false)
     }
@@ -952,8 +995,12 @@ export function EcolmsDashboard() {
       await refreshProject(selectedProject.id)
       setIsEditing(false)
       setSelectedStage(stage)
+      notify("info", "Генерация запущена", `Этап «${stageLabels[stage]}» запущен.`)
     } catch (error) {
-      setListError(error instanceof Error ? error.message : "Не удалось запустить генерацию")
+      const message =
+        error instanceof Error ? error.message : "Не удалось запустить генерацию"
+      setListError(message)
+      notify("error", "Ошибка запуска генерации", message)
     } finally {
       setGeneratingStage(null)
       setMutating(false)
@@ -1902,6 +1949,32 @@ export function EcolmsDashboard() {
           </SheetFooter>
         </SheetContent>
       </Sheet>
+
+      <div className="pointer-events-none fixed bottom-4 right-4 z-[70] flex w-[min(92vw,420px)] flex-col items-end gap-2">
+        {alerts.map((item) => (
+          <Alert
+            key={item.id}
+            variant={item.type === "error" ? "destructive" : "default"}
+            className={cn(
+              "pointer-events-auto relative w-full pr-10 shadow-lg",
+              item.type === "success" ? "border-emerald-300 bg-emerald-50 text-emerald-900" : ""
+            )}
+          >
+            <AlertTitle>{item.title}</AlertTitle>
+            {item.description ? <AlertDescription>{item.description}</AlertDescription> : null}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              className="absolute right-2 top-2"
+              onClick={() => dismissAlert(item.id)}
+              aria-label="Закрыть уведомление"
+            >
+              <XIcon className="size-3.5" />
+            </Button>
+          </Alert>
+        ))}
+      </div>
     </>
   )
 }

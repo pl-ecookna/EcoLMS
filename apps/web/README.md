@@ -1,36 +1,41 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Web
 
-## Getting Started
+Фронтенд EcoLMS на Next.js App Router.
 
-First, run the development server:
+## Актуальный стек
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+- Next.js `16.2.2`
+- React `19.2.4`
+- TypeScript `5`
+- Tailwind CSS `4`
+- shadcn/ui
+- `lucide-react`
+- `react-markdown` + `remark-gfm`
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Что реализовано
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- список проектов с пагинацией;
+- создание проекта;
+- загрузка исходных файлов;
+- просмотр статусов проекта и этапов;
+- просмотр history задач и health-состояния сервисов;
+- запуск генерации этапов;
+- редактирование Markdown-артефактов;
+- скачивание итоговых артефактов.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Важные технические детали
 
-## Learn More
+- Корневой экран: [apps/web/src/components/ecolms-dashboard.tsx](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/apps/web/src/components/ecolms-dashboard.tsx)
+- Страница приложения: [apps/web/src/app/page.tsx](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/apps/web/src/app/page.tsx)
+- Клиент API: [apps/web/src/lib/ecolms-api.ts](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/apps/web/src/lib/ecolms-api.ts)
+- Внутренний proxy для backend-запросов: [apps/web/src/app/api/[...path]/route.ts](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/apps/web/src/app/api/[...path]/route.ts)
+- Proxy для `PUT` загрузки частей файла в S3: [apps/web/src/app/api/s3-upload/route.ts](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/apps/web/src/app/api/s3-upload/route.ts)
 
-To learn more about Next.js, take a look at the following resources:
+## Запуск
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- `pnpm dev`
+- `pnpm build`
+- `pnpm start`
+- `pnpm lint`
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+По умолчанию frontend ожидает backend через `ECOLMS_API_BASE_URL`.

@@ -1,90 +1,132 @@
-# API Описание
+# API описание
 
-Все маршруты предполагаются под префиксом `/api`.
+Все внешние маршруты backend доступны под префиксом `/api`.
 
----
+## Актуальные маршруты
 
-## Projects
+### Health
 
-### `POST /api/projects`
-Создать проект.
+- `GET /api/health`
+  Возвращает сводку по `api`, `postgres`, `redis`, `openai`, `worker`, `transcriptionService`, а также счётчики проектов и upload-сессий.
 
-### `GET /api/projects?page=1&limit=25`
-Получить список проектов с пагинацией.
+### Projects
 
-### `GET /api/projects/{id}`
-Получить карточку проекта, его статус, список файлов и этапов.
+- `POST /api/projects`
+  Создаёт проект.
 
-### `POST /api/projects/{id}/start`
-Запустить обработку проекта после завершения загрузки.
+  Тело запроса:
 
-### `GET /api/projects/{id}/status`
-Получить текущий статус проекта и активный этап.
+  ```json
+  {
+    "name": "Курс по продукту",
+    "githubRef": "https://github.com/org/repo",
+    "note": "Краткое описание проекта"
+  }
+  ```
 
----
+- `GET /api/projects?page=1&limit=25`
+  Возвращает список проектов с пагинацией. `limit` ограничен значением `25`.
 
-## Uploads
+- `GET /api/projects/{id}`
+  Возвращает расширенную карточку проекта:
+  source files, jobs, artifacts, reviews, stage drafts и статусы этапов.
 
-### `POST /api/projects/{id}/uploads/init`
-Инициализировать multipart upload для файла проекта.
+- `PATCH /api/projects/{id}`
+  Обновляет `name` и `note`.
 
-### `POST /api/uploads/{uploadId}/parts/sign`
-Получить signed URL для загрузки очередной части.
+- `DELETE /api/projects/{id}`
+  Удаляет проект.
 
-### `POST /api/uploads/{uploadId}/complete`
-Завершить multipart upload.
+- `DELETE /api/projects/{id}/source-files/{sourceFileId}`
+  Удаляет исходный файл проекта.
 
-### `POST /api/uploads/{uploadId}/abort`
-Отменить multipart upload.
+- `POST /api/projects/{id}/start`
+  Ставит в очередь начальную обработку для текущего этапа проекта.
 
----
+- `POST /api/projects/{id}/generate`
+  Запускает генерацию конкретного этапа.
 
-## Artifacts
+  Тело запроса:
 
-### `GET /api/projects/{id}/artifacts`
-Получить список артефактов проекта.
+  ```json
+  {
+    "stage": "course_outline",
+    "autoGenerateAll": false,
+    "overwriteExisting": false
+  }
+  ```
 
-### `GET /api/projects/{id}/artifacts/{artifactId}`
-Получить метаданные артефакта и ссылку на скачивание.
+- `GET /api/projects/{id}/status`
+  Возвращает компактный статус проекта.
 
-### `PUT /api/projects/{id}/artifacts/{artifactId}`
-Сохранить отредактированную версию результата этапа.
+- `GET /api/projects/{id}/download`
+  Возвращает список артефактов с `downloadUrl`.
 
-### `POST /api/projects/{id}/artifacts/{artifactId}/approve`
-Подтвердить результат этапа и разрешить запуск следующего этапа.
+### Uploads
 
-### `GET /api/projects/{id}/download`
-Получить набор итоговых артефактов для скачивания.
+- `POST /api/projects/{id}/uploads/init`
+  Инициализирует multipart upload.
 
----
+  Тело запроса:
 
-## Jobs
+  ```json
+  {
+    "fileName": "manual.pdf",
+    "fileSize": 1024,
+    "mimeType": "application/pdf",
+    "kind": "document"
+  }
+  ```
 
-### `GET /api/projects/{id}/jobs`
-Получить список job по проекту.
+- `POST /api/uploads/{uploadId}/parts/sign`
+  Выдаёт signed URL для конкретной части.
 
-### `POST /api/projects/{id}/jobs/{jobId}/retry`
-Повторить неуспешный этап.
+  Тело запроса:
 
----
+  ```json
+  {
+    "partNumber": 1
+  }
+  ```
 
-## Internal transcription service
+- `POST /api/uploads/{uploadId}/complete`
+  Завершает multipart upload и переводит файл в `completed`.
 
-### `POST /transcribe`
-Принять аудиофайл или ссылку на файл и вернуть:
+- `POST /api/uploads/{uploadId}/abort`
+  Прерывает upload.
 
-- текст;
-- сегменты;
-- метаданные выполнения.
+### Artifacts
 
-### `GET /health`
-Проверка доступности transcription service.
+- `GET /api/projects/{id}/artifacts`
+  Возвращает список артефактов проекта.
 
----
+- `GET /api/projects/{id}/artifacts/{artifactId}`
+  Возвращает один артефакт.
 
-## Базовые форматы ответов
+- `PUT /api/projects/{id}/artifacts/{artifactId}`
+  Сохраняет обновлённый `contentMd`.
 
-Для MVP рекомендуется единый формат:
+  Тело запроса:
+
+  ```json
+  {
+    "contentMd": "# Обновлённый markdown"
+  }
+  ```
+
+Примечание: логика `approveArtifact` в store уже есть, но публичный маршрут подтверждения этапа сейчас не опубликован контроллером.
+
+### Jobs
+
+- `GET /api/projects/{id}/jobs`
+  Возвращает список задач проекта.
+
+- `POST /api/projects/{id}/jobs/{jobId}/retry`
+  Повторно ставит задачу в очередь.
+
+## Формат ответа
+
+Успешный ответ:
 
 ```json
 {
@@ -94,23 +136,19 @@
 }
 ```
 
-При ошибке:
+Формат ошибки в текущем API может отличаться по деталям в зависимости от источника ошибки, но envelope остаётся тем же:
 
 ```json
 {
   "success": false,
   "data": null,
-  "error": {
-    "code": "VALIDATION_ERROR",
-    "message": "..."
-  }
+  "error": "..."
 }
 ```
 
----
+## Internal transcription service
 
-## Примечания
+Этот сервис не публикуется наружу через `/api`, но используется `worker` и Docker stack.
 
-- Список проектов должен поддерживать пагинацию по 25 элементов.
-- Все большие файлы загружаются напрямую в S3, backend не проксирует бинарные данные.
-- Фронтенд не хранит постоянные S3 credentials.
+- `GET /health`
+- `POST /transcribe`
