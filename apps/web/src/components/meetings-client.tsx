@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import {
   ArrowLeftIcon,
   CopyIcon,
@@ -810,6 +810,8 @@ export function MeetingDetailView({
   const [speakerOverrides, setSpeakerOverrides] = useState<Record<string, string>>({})
   const [savingSpeakerId, setSavingSpeakerId] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [markdownMode, setMarkdownMode] = useState<"preview" | "edit">("preview")
+  const [markdownDraft, setMarkdownDraft] = useState("")
   const [error, setError] = useState<string | null>(null)
 
   const meeting = useMemo(() => {
@@ -837,6 +839,10 @@ export function MeetingDetailView({
   }, [initialMeeting, speakerOverrides])
 
   const combinedMarkdown = useMemo(() => buildReadableMarkdown(meeting), [meeting])
+
+  useEffect(() => {
+    setMarkdownDraft(combinedMarkdown)
+  }, [combinedMarkdown])
 
   const handleSaveSpeaker = async (speaker: MeetingSpeakerRecord) => {
     const draft = speakerDrafts[speaker.id]?.trim()
@@ -866,13 +872,13 @@ export function MeetingDetailView({
   }
 
   const handleCopyMarkdown = async () => {
-    await navigator.clipboard.writeText(combinedMarkdown)
+    await navigator.clipboard.writeText(markdownDraft)
     setCopied(true)
     window.setTimeout(() => setCopied(false), 1500)
   }
 
   const handleDownloadMarkdown = () => {
-    downloadText(`${meeting.title}.md`, combinedMarkdown)
+    downloadText(`${meeting.title}.md`, markdownDraft)
   }
 
   const handleRefresh = () => {
@@ -945,10 +951,34 @@ export function MeetingDetailView({
           <TabsContent value="markdown" className="space-y-4">
             <Card>
               <CardHeader className="border-b">
-                <CardTitle>Человекочитаемый markdown</CardTitle>
-                <CardDescription>
-                  На этой вкладке собраны саммари, протокол и поручения без технических деталей.
-                </CardDescription>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <CardTitle>Человекочитаемый markdown</CardTitle>
+                    <CardDescription>
+                      На этой вкладке собраны саммари, протокол и поручения без технических деталей.
+                    </CardDescription>
+                  </div>
+                  <div className="inline-flex rounded-lg border bg-muted/30 p-1">
+                    <Button
+                      type="button"
+                      variant={markdownMode === "preview" ? "secondary" : "ghost"}
+                      size="sm"
+                      onClick={() => setMarkdownMode("preview")}
+                      className="rounded-md"
+                    >
+                      Предпросмотр
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={markdownMode === "edit" ? "secondary" : "ghost"}
+                      size="sm"
+                      onClick={() => setMarkdownMode("edit")}
+                      className="rounded-md"
+                    >
+                      Редактирование
+                    </Button>
+                  </div>
+                </div>
               </CardHeader>
               <CardContent className="flex flex-col gap-4 p-4">
                 <div className="flex flex-wrap gap-2">
@@ -961,27 +991,24 @@ export function MeetingDetailView({
                     Скачать .md
                   </Button>
                 </div>
-                <Textarea
-                  readOnly
-                  value={combinedMarkdown}
-                  className="min-h-[420px] font-mono text-xs leading-6"
-                />
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="border-b">
-                <CardTitle>Предпросмотр</CardTitle>
-                <CardDescription>Отрисовка markdown без потери структуры.</CardDescription>
-              </CardHeader>
-              <CardContent className="p-4">
-                <ScrollArea className="h-[520px] rounded-xl border bg-background p-4">
-                  <div className="max-w-none">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents()}>
-                      {combinedMarkdown}
-                    </ReactMarkdown>
-                  </div>
-                </ScrollArea>
+                {markdownMode === "preview" ? (
+                  <ScrollArea className="h-[620px] rounded-xl border bg-background p-4">
+                    <div className="max-w-none">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={markdownComponents()}
+                      >
+                        {markdownDraft}
+                      </ReactMarkdown>
+                    </div>
+                  </ScrollArea>
+                ) : (
+                  <Textarea
+                    value={markdownDraft}
+                    onChange={(event) => setMarkdownDraft(event.target.value)}
+                    className="min-h-[620px] font-mono text-xs leading-6"
+                  />
+                )}
               </CardContent>
             </Card>
           </TabsContent>
