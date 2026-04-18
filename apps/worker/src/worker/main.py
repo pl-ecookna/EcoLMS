@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import socket
+import ssl
+import subprocess
+import tempfile
 import time
 from io import BytesIO
 from dataclasses import asdict, dataclass
@@ -42,6 +46,15 @@ class WorkerConfig:
     openrouter_base_url: str = "https://openrouter.ai/api/v1/chat/completions"
     llm_timeout_seconds: float = 120.0
     job_queue_key: str = "ecolms:processing-jobs"
+    meeting_job_queue_key: str = "ecolms:meeting-jobs"
+    salutespeech_auth_key: str = ""
+    salutespeech_oauth_url: str = ""
+    salutespeech_rest_url: str = "https://smartspeech.sber.ru/rest/v1"
+    salutespeech_scope: str = "SALUTE_SPEECH_PERS"
+    salutespeech_model: str = "general"
+    salutespeech_language: str = "ru-RU"
+    salutespeech_poll_interval_seconds: float = 5.0
+    salutespeech_timeout_seconds: float = 1800.0
 
 
 INTERNAL_POSTGRES_URL = (
@@ -111,6 +124,21 @@ def load_config() -> WorkerConfig:
         ),
         llm_timeout_seconds=float(os.getenv("LLM_TIMEOUT_SECONDS", "120")),
         job_queue_key=os.getenv("WORKER_JOB_QUEUE_KEY", "ecolms:processing-jobs"),
+        meeting_job_queue_key=os.getenv("WORKER_MEETING_JOB_QUEUE_KEY", "ecolms:meeting-jobs"),
+        salutespeech_auth_key=os.getenv("SALUTESPEECH_AUTH_KEY", "").strip(),
+        salutespeech_oauth_url=os.getenv("SALUTESPEECH_OAUTH_URL", "").strip(),
+        salutespeech_rest_url=os.getenv(
+            "SALUTESPEECH_REST_URL", "https://smartspeech.sber.ru/rest/v1"
+        ).strip(),
+        salutespeech_scope=os.getenv("SALUTESPEECH_SCOPE", "SALUTE_SPEECH_PERS").strip(),
+        salutespeech_model=os.getenv("SALUTESPEECH_MODEL", "general").strip() or "general",
+        salutespeech_language=os.getenv("SALUTESPEECH_LANGUAGE", "ru-RU").strip() or "ru-RU",
+        salutespeech_poll_interval_seconds=float(
+            os.getenv("SALUTESPEECH_POLL_INTERVAL_SECONDS", "5")
+        ),
+        salutespeech_timeout_seconds=float(
+            os.getenv("SALUTESPEECH_TIMEOUT_SECONDS", "1800")
+        ),
     )
 
 
@@ -609,6 +637,13 @@ def stage_prompt_metadata(stage: str) -> dict[str, Any]:
 
 
 STAGE_ORDER = ["source_compiled", "course_outline", "course_content", "course_test"]
+MEETING_STAGE_ORDER = [
+    "audio_prepared",
+    "transcript_compiled",
+    "meeting_summary",
+    "meeting_protocol",
+    "meeting_actions",
+]
 
 
 def next_stage(stage: str) -> str | None:
@@ -617,6 +652,18 @@ def next_stage(stage: str) -> str | None:
     except ValueError:
         return None
     return STAGE_ORDER[index + 1] if index + 1 < len(STAGE_ORDER) else None
+
+
+def next_meeting_stage(stage: str) -> str | None:
+    try:
+        index = MEETING_STAGE_ORDER.index(stage)
+    except ValueError:
+        return None
+    return (
+        MEETING_STAGE_ORDER[index + 1]
+        if index + 1 < len(MEETING_STAGE_ORDER)
+        else None
+    )
 
 
 def progress_for_stage(stage: str, *, completed: bool) -> int:
@@ -978,6 +1025,1241 @@ def set_job_failed(conn: psycopg.Connection, job_id: str, error_text: str) -> No
     )
 
 
+def salutespeech_ssl_context() -> ssl.SSLContext:
+    return ssl.create_default_context()
+
+
+def salutespeech_request(
+    url: str,
+    *,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+    data: bytes | None = None,
+    timeout: float = 60.0,
+) -> dict[str, Any]:
+    request = urlrequest.Request(
+        url,
+        method=method,
+        data=data,
+        headers=headers or {},
+    )
+    with urlrequest.urlopen(
+        request,
+        timeout=timeout,
+        context=salutespeech_ssl_context(),
+    ) as response:
+        raw = response.read().decode("utf-8")
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise RuntimeError("SaluteSpeech вернул невалидный JSON.")
+    return payload
+
+
+def get_salutespeech_access_token(config: WorkerConfig) -> str:
+    if not config.salutespeech_auth_key:
+        raise RuntimeError("SALUTESPEECH_AUTH_KEY не задан.")
+    if not config.salutespeech_oauth_url:
+        raise RuntimeError("SALUTESPEECH_OAUTH_URL не задан.")
+
+    data = f"scope={config.salutespeech_scope}".encode("utf-8")
+    payload = salutespeech_request(
+        config.salutespeech_oauth_url,
+        method="POST",
+        data=data,
+        headers={
+            "Authorization": f"Basic {config.salutespeech_auth_key}",
+            "RqUID": f"ecolms-{int(time.time() * 1000)}",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        timeout=30.0,
+    )
+    token = str(
+        payload.get("access_token")
+        or payload.get("result", {}).get("access_token")
+        or ""
+    ).strip()
+    if not token:
+        raise RuntimeError("SaluteSpeech не вернул access token.")
+    return token
+
+
+def encode_multipart_form(field_name: str, file_name: str, content: bytes) -> tuple[bytes, str]:
+    boundary = f"----ecolms-boundary-{int(time.time() * 1000)}"
+    body = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="{field_name}"; filename="{file_name}"\r\n'
+        "Content-Type: application/octet-stream\r\n\r\n"
+    ).encode("utf-8") + content + f"\r\n--{boundary}--\r\n".encode("utf-8")
+    return body, boundary
+
+
+def salutespeech_upload_file(
+    config: WorkerConfig, token: str, file_name: str, content: bytes
+) -> str:
+    body, boundary = encode_multipart_form("file", file_name, content)
+    payload = salutespeech_request(
+        f"{config.salutespeech_rest_url.rstrip('/')}/data:upload",
+        method="POST",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+        timeout=120.0,
+    )
+    request_file_id = str(
+        payload.get("result", {}).get("request_file_id")
+        or payload.get("request_file_id")
+        or ""
+    ).strip()
+    if not request_file_id:
+        raise RuntimeError("SaluteSpeech не вернул request_file_id.")
+    return request_file_id
+
+
+def salutespeech_create_recognition_task(
+    config: WorkerConfig,
+    token: str,
+    *,
+    request_file_id: str,
+    sample_rate: int,
+    channels_count: int,
+) -> str:
+    payload = salutespeech_request(
+        f"{config.salutespeech_rest_url.rstrip('/')}/speech:async_recognize",
+        method="POST",
+        data=json.dumps(
+            {
+                "request_file_id": request_file_id,
+                "options": {
+                    "model": config.salutespeech_model,
+                    "language": config.salutespeech_language,
+                    "audio_encoding": "PCM_S16LE",
+                    "sample_rate": sample_rate,
+                    "channels_count": channels_count,
+                    "speaker_info": True,
+                },
+            },
+            ensure_ascii=False,
+        ).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json; charset=utf-8",
+        },
+        timeout=60.0,
+    )
+    task_id = str(payload.get("result", {}).get("id") or payload.get("id") or "").strip()
+    if not task_id:
+        raise RuntimeError("SaluteSpeech не вернул id задачи распознавания.")
+    return task_id
+
+
+def salutespeech_get_task_status(config: WorkerConfig, token: str, task_id: str) -> dict[str, Any]:
+    return salutespeech_request(
+        f"{config.salutespeech_rest_url.rstrip('/')}/task:get?id={task_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=30.0,
+    )
+
+
+def salutespeech_download_result(
+    config: WorkerConfig, token: str, response_file_id: str
+) -> dict[str, Any]:
+    return salutespeech_request(
+        f"{config.salutespeech_rest_url.rstrip('/')}/data:download?response_file_id={response_file_id}",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=120.0,
+    )
+
+
+def extract_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def to_milliseconds(value: Any) -> int | None:
+    number = extract_float(value)
+    if number is None:
+        return None
+    if number > 10_000:
+        return int(number)
+    return int(number * 1000)
+
+
+def collect_segment_candidates(value: Any, results: list[dict[str, Any]]) -> None:
+    if isinstance(value, dict):
+        has_speaker = "speaker_id" in value
+        has_text = isinstance(value.get("text"), str) and value.get("text", "").strip()
+        has_word = isinstance(value.get("word"), str) and value.get("word", "").strip()
+        if has_speaker and (has_text or has_word):
+            results.append(value)
+        for nested in value.values():
+            collect_segment_candidates(nested, results)
+    elif isinstance(value, list):
+        for item in value:
+            collect_segment_candidates(item, results)
+
+
+def parse_salutespeech_segments(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    collect_segment_candidates(payload, candidates)
+    segment_like: list[dict[str, Any]] = []
+    word_like: list[dict[str, Any]] = []
+
+    for item in candidates:
+        speaker_id = int(item.get("speaker_id", -1))
+        if speaker_id < 0:
+            continue
+
+        if isinstance(item.get("text"), str) and item.get("text", "").strip():
+            start_ms = (
+                to_milliseconds(item.get("start_ms"))
+                or to_milliseconds(item.get("start"))
+                or to_milliseconds(item.get("start_time"))
+            )
+            end_ms = (
+                to_milliseconds(item.get("end_ms"))
+                or to_milliseconds(item.get("end"))
+                or to_milliseconds(item.get("end_time"))
+            )
+            if start_ms is None or end_ms is None or end_ms < start_ms:
+                continue
+            segment_like.append(
+                {
+                    "speaker_id": speaker_id,
+                    "text": str(item.get("text")).strip(),
+                    "start_ms": start_ms,
+                    "end_ms": end_ms,
+                    "confidence": extract_float(item.get("confidence")),
+                    "provider_payload_json": item,
+                }
+            )
+        elif isinstance(item.get("word"), str) and item.get("word", "").strip():
+            start_ms = (
+                to_milliseconds(item.get("start_ms"))
+                or to_milliseconds(item.get("start"))
+                or to_milliseconds(item.get("start_time"))
+            )
+            end_ms = (
+                to_milliseconds(item.get("end_ms"))
+                or to_milliseconds(item.get("end"))
+                or to_milliseconds(item.get("end_time"))
+            )
+            if start_ms is None or end_ms is None or end_ms < start_ms:
+                continue
+            word_like.append(
+                {
+                    "speaker_id": speaker_id,
+                    "word": str(item.get("word")).strip(),
+                    "start_ms": start_ms,
+                    "end_ms": end_ms,
+                    "confidence": extract_float(item.get("confidence")),
+                    "provider_payload_json": item,
+                }
+            )
+
+    if segment_like:
+        segment_like.sort(key=lambda item: (item["start_ms"], item["end_ms"]))
+        return segment_like
+
+    if not word_like:
+        raise RuntimeError("SaluteSpeech не вернул diarized segments со speaker_id.")
+
+    word_like.sort(key=lambda item: (item["start_ms"], item["end_ms"]))
+    merged: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    for word in word_like:
+        if current is None:
+            current = {
+                "speaker_id": word["speaker_id"],
+                "text": word["word"],
+                "start_ms": word["start_ms"],
+                "end_ms": word["end_ms"],
+                "confidence_values": [word.get("confidence")],
+                "provider_items": [word["provider_payload_json"]],
+            }
+            continue
+        gap = int(word["start_ms"]) - int(current["end_ms"])
+        if (
+            int(word["speaker_id"]) == int(current["speaker_id"])
+            and gap <= 1200
+        ):
+            current["text"] = f"{current['text']} {word['word']}".strip()
+            current["end_ms"] = word["end_ms"]
+            current["confidence_values"].append(word.get("confidence"))
+            current["provider_items"].append(word["provider_payload_json"])
+            continue
+        confidences = [value for value in current["confidence_values"] if value is not None]
+        merged.append(
+            {
+                "speaker_id": current["speaker_id"],
+                "text": current["text"].strip(),
+                "start_ms": current["start_ms"],
+                "end_ms": current["end_ms"],
+                "confidence": round(sum(confidences) / len(confidences), 4)
+                if confidences
+                else None,
+                "provider_payload_json": {"words": current["provider_items"]},
+            }
+        )
+        current = {
+            "speaker_id": word["speaker_id"],
+            "text": word["word"],
+            "start_ms": word["start_ms"],
+            "end_ms": word["end_ms"],
+            "confidence_values": [word.get("confidence")],
+            "provider_items": [word["provider_payload_json"]],
+        }
+
+    if current is not None:
+        confidences = [value for value in current["confidence_values"] if value is not None]
+        merged.append(
+            {
+                "speaker_id": current["speaker_id"],
+                "text": current["text"].strip(),
+                "start_ms": current["start_ms"],
+                "end_ms": current["end_ms"],
+                "confidence": round(sum(confidences) / len(confidences), 4)
+                if confidences
+                else None,
+                "provider_payload_json": {"words": current["provider_items"]},
+            }
+        )
+
+    return merged
+
+
+def format_ms_range(start_ms: int, end_ms: int) -> str:
+    def one(value: int) -> str:
+        seconds_total = max(0, value // 1000)
+        hours = seconds_total // 3600
+        minutes = (seconds_total % 3600) // 60
+        seconds = seconds_total % 60
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+    return f"{one(start_ms)} - {one(end_ms)}"
+
+
+def build_meeting_transcript_markdown(title: str, segments: list[dict[str, Any]]) -> str:
+    lines = [f"# {title}", ""]
+    for segment in segments:
+        lines.append(
+            f"## [{format_ms_range(int(segment['start_ms']), int(segment['end_ms']))}] {segment['display_name']}"
+        )
+        lines.append(str(segment["text"]).strip())
+        lines.append("")
+    return "\n".join(lines).strip() + "\n"
+
+
+def build_meeting_transcript_json(
+    meeting_id: str,
+    speakers: list[dict[str, Any]],
+    segments: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "meetingId": meeting_id,
+        "speakers": [
+            {
+                "id": item["id"],
+                "speakerLabel": item["speaker_label"],
+                "displayName": item["display_name"],
+                "isUserEdited": bool(item["is_user_edited"]),
+                "sortOrder": int(item["sort_order"]),
+            }
+            for item in speakers
+        ],
+        "segments": [
+            {
+                "id": int(item["id"]),
+                "speakerId": item["speaker_id"],
+                "speakerLabel": item["speaker_label"],
+                "displayName": item["display_name"],
+                "startMs": int(item["start_ms"]),
+                "endMs": int(item["end_ms"]),
+                "text": str(item["text"]),
+                "confidence": item["confidence"],
+            }
+            for item in segments
+        ],
+    }
+
+
+def build_meeting_llm_transcript_input(segments: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for segment in segments:
+        parts.append(
+            "\n".join(
+                [
+                    f"[segment_id={segment['id']}]",
+                    f"[{format_ms_range(int(segment['start_ms']), int(segment['end_ms']))}] {segment['display_name']}",
+                    str(segment["text"]).strip(),
+                ]
+            )
+        )
+    return "\n\n".join(parts).strip()
+
+
+def generate_meeting_markdown_with_llm(
+    config: WorkerConfig,
+    *,
+    stage: str,
+    meeting_title: str,
+    transcript_input: str,
+) -> dict[str, Any]:
+    if not transcript_input.strip():
+        raise RuntimeError(f"Невозможно вызвать LLM для {stage}: пустой transcript.")
+
+    if stage == "meeting_summary":
+        task = (
+            "Сформируй краткое summary встречи на русском языке. "
+            "Верни только JSON с полями markdown и shortSummary. "
+            "Используй только данные из transcript, ничего не выдумывай."
+        )
+    elif stage == "meeting_protocol":
+        task = (
+            "Сформируй протокол встречи на русском языке. "
+            "Верни только JSON с полями markdown и shortSummary. "
+            "Используй только данные из transcript, ничего не выдумывай."
+        )
+    else:
+        task = (
+            "Сформируй структурированные результаты встречи на русском языке. "
+            "Верни только JSON с полями markdown, shortSummary, decisions, actionItems, openQuestions. "
+            "Для actionItems указывай assignee и deadline только если они явно прозвучали. "
+            "Для actionItems по возможности указывай sourceSegmentIds как массив segment_id из transcript."
+        )
+
+    user_payload = {
+        "meetingTitle": meeting_title,
+        "stage": stage,
+        "task": task,
+        "transcript": transcript_input[:180000],
+    }
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Ты анализируешь русскоязычные встречи. "
+                "Используй только факты из transcript. "
+                "Не придумывай имена, сроки, решения и поручения, которых нет в тексте."
+            ),
+        },
+        {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+    ]
+
+    available_providers: list[str] = []
+    if config.openai_api_key.strip():
+        available_providers.append("openai")
+    if config.openrouter_api_key.strip():
+        available_providers.append("openrouter")
+    if not available_providers:
+        raise RuntimeError("OPENAI_API_KEY или OPENROUTER_API_KEY не заданы.")
+
+    primary = config.llm_primary_provider
+    if primary not in ("openai", "openrouter"):
+        primary = "openai"
+    ordered = [primary, "openrouter" if primary == "openai" else "openai"]
+    ordered = [provider for provider in ordered if provider in available_providers]
+    attempts: list[dict[str, Any]] = []
+
+    for provider in ordered:
+        try:
+            if provider == "openai":
+                content, model_name = openai_chat_completion(
+                    config.openai_api_key,
+                    config.openai_model,
+                    messages,
+                    config.llm_timeout_seconds,
+                )
+            else:
+                content, model_name = openrouter_chat_completion(
+                    config.openrouter_api_key,
+                    config.openrouter_base_url,
+                    config.openrouter_model,
+                    messages,
+                    config.llm_timeout_seconds,
+                )
+            parsed = parse_json_from_text(content)
+            markdown = str(parsed.get("markdown") or "").strip()
+            short_summary = str(parsed.get("shortSummary") or "").strip()
+            if not markdown:
+                raise RuntimeError("LLM вернул пустое поле markdown.")
+            return {
+                **parsed,
+                "markdown": markdown,
+                "shortSummary": short_summary,
+                "provider": provider,
+                "model": model_name,
+                "attempts": attempts + [{"provider": provider, "ok": True}],
+            }
+        except Exception as exc:
+            attempts.append({"provider": provider, "ok": False, "error": str(exc)})
+
+    details = "; ".join(
+        f"{item['provider']}: {item['error']}" for item in attempts if not item["ok"]
+    )
+    raise RuntimeError(f"Все LLM-провайдеры завершились ошибкой: {details}")
+
+
+def meeting_actions_json_from_llm(result: dict[str, Any], markdown: str) -> dict[str, Any]:
+    decisions = result.get("decisions")
+    action_items = result.get("actionItems")
+    open_questions = result.get("openQuestions")
+    return {
+        "decisions": decisions if isinstance(decisions, list) else [],
+        "actionItems": action_items if isinstance(action_items, list) else [],
+        "openQuestions": open_questions if isinstance(open_questions, list) else [],
+        "markdown": markdown,
+    }
+
+
+def load_meeting(conn: psycopg.Connection, meeting_id: str) -> dict[str, Any]:
+    row = conn.execute(
+        "select * from meetings where id = %s limit 1",
+        (meeting_id,),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError(f"Meeting not found: {meeting_id}")
+    return dict(row)
+
+
+def load_meeting_job(conn: psycopg.Connection, job_id: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        "select * from meeting_jobs where id = %s limit 1",
+        (job_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def load_meeting_source_file(conn: psycopg.Connection, meeting_id: str) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        select *
+        from meeting_source_files
+        where meeting_id = %s
+        limit 1
+        """,
+        (meeting_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def set_meeting_job_processing(conn: psycopg.Connection, job_id: str) -> None:
+    conn.execute(
+        """
+        update meeting_jobs
+        set status = 'processing', started_at = now(), error_text = null
+        where id = %s
+        """,
+        (job_id,),
+    )
+
+
+def set_meeting_job_done(
+    conn: psycopg.Connection, job_id: str, stage: str, metadata: dict[str, Any]
+) -> None:
+    conn.execute(
+        """
+        update meeting_jobs
+        set status = 'done',
+            result_json = %s::jsonb,
+            finished_at = now()
+        where id = %s
+        """,
+        (
+            json.dumps(
+                {"status": "done", "stage": stage, "generatedAt": utc_now(), **metadata},
+                ensure_ascii=False,
+            ),
+            job_id,
+        ),
+    )
+
+
+def set_meeting_job_failed(conn: psycopg.Connection, job_id: str, error_text: str) -> None:
+    conn.execute(
+        """
+        update meeting_jobs
+        set status = 'failed',
+            error_text = %s,
+            finished_at = now()
+        where id = %s
+        """,
+        (error_text, job_id),
+    )
+
+
+def ensure_meeting_artifact(
+    conn: psycopg.Connection,
+    meeting_id: str,
+    stage: str,
+    markdown: str,
+    content_json: dict[str, Any],
+) -> None:
+    conn.execute(
+        """
+        update meeting_artifacts
+        set content_md = %s,
+            updated_at = now()
+        where meeting_id = %s and stage = %s and format = 'md'
+        """,
+        (markdown, meeting_id, stage),
+    )
+    conn.execute(
+        """
+        update meeting_artifacts
+        set content_json = %s::jsonb,
+            updated_at = now()
+        where meeting_id = %s and stage = %s and format = 'json'
+        """,
+        (json.dumps(content_json, ensure_ascii=False), meeting_id, stage),
+    )
+
+
+def load_meeting_artifact(
+    conn: psycopg.Connection, meeting_id: str, stage: str, format_name: str
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        select *
+        from meeting_artifacts
+        where meeting_id = %s and stage = %s and format = %s
+        limit 1
+        """,
+        (meeting_id, stage, format_name),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def load_meeting_speakers(conn: psycopg.Connection, meeting_id: str) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        select *
+        from meeting_speakers
+        where meeting_id = %s
+        order by sort_order asc, created_at asc
+        """,
+        (meeting_id,),
+    ).fetchall()
+    return [dict(item) for item in rows]
+
+
+def load_meeting_segments(conn: psycopg.Connection, meeting_id: str) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        select *
+        from meeting_speaker_segments
+        where meeting_id = %s
+        order by start_ms asc, id asc
+        """,
+        (meeting_id,),
+    ).fetchall()
+    return [dict(item) for item in rows]
+
+
+def clear_meeting_transcript(conn: psycopg.Connection, meeting_id: str) -> None:
+    conn.execute("delete from meeting_speaker_segments where meeting_id = %s", (meeting_id,))
+    conn.execute("delete from meeting_speakers where meeting_id = %s", (meeting_id,))
+
+
+def upsert_meeting_transcript(
+    conn: psycopg.Connection, meeting_id: str, raw_segments: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    clear_meeting_transcript(conn, meeting_id)
+    speaker_map: dict[int, dict[str, Any]] = {}
+    sort_order = 0
+    for segment in raw_segments:
+        speaker_key = int(segment["speaker_id"])
+        if speaker_key in speaker_map:
+            continue
+        sort_order += 1
+        speaker_id = f"{meeting_id}-speaker-{speaker_key}"
+        speaker = {
+            "id": speaker_id,
+            "meeting_id": meeting_id,
+            "speaker_label": f"speaker_{speaker_key}",
+            "display_name": f"Спикер {sort_order}",
+            "is_user_edited": False,
+            "sort_order": sort_order,
+        }
+        speaker_map[speaker_key] = speaker
+        conn.execute(
+            """
+            insert into meeting_speakers (
+              id, meeting_id, speaker_label, display_name, is_user_edited, sort_order, created_at, updated_at
+            ) values (
+              %s, %s, %s, %s, %s, %s, now(), now()
+            )
+            """,
+            (
+                speaker["id"],
+                speaker["meeting_id"],
+                speaker["speaker_label"],
+                speaker["display_name"],
+                speaker["is_user_edited"],
+                speaker["sort_order"],
+            ),
+        )
+
+    inserted_segments: list[dict[str, Any]] = []
+    for segment in raw_segments:
+        speaker = speaker_map[int(segment["speaker_id"])]
+        row = conn.execute(
+            """
+            insert into meeting_speaker_segments (
+              meeting_id, speaker_id, speaker_label, start_ms, end_ms, text, confidence, provider_payload_json, created_at
+            ) values (
+              %s, %s, %s, %s, %s, %s, %s, %s::jsonb, now()
+            )
+            returning *
+            """,
+            (
+                meeting_id,
+                speaker["id"],
+                speaker["speaker_label"],
+                int(segment["start_ms"]),
+                int(segment["end_ms"]),
+                str(segment["text"]).strip(),
+                segment.get("confidence"),
+                json.dumps(segment.get("provider_payload_json") or {}, ensure_ascii=False),
+            ),
+        ).fetchone()
+        if row is not None:
+            inserted = dict(row)
+            inserted["display_name"] = speaker["display_name"]
+            inserted_segments.append(inserted)
+
+    speakers = list(speaker_map.values())
+    return speakers, inserted_segments
+
+
+def ffprobe_audio_details(source_path: str) -> tuple[int, int, float]:
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=channels",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "json",
+            source_path,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"ffprobe failed: {(result.stderr or result.stdout or '').strip()}"
+        )
+    payload = json.loads(result.stdout or "{}")
+    channels = int(
+        payload.get("streams", [{}])[0].get("channels") or 1
+    )
+    duration = float(payload.get("format", {}).get("duration") or 0.0)
+    target_channels = 2 if channels > 1 else 1
+    return channels, target_channels, duration
+
+
+def upload_s3_object_bytes(
+    config: WorkerConfig, storage_key: str, content: bytes, content_type: str
+) -> None:
+    s3_client(config).put_object(
+        Bucket=config.s3_bucket,
+        Key=storage_key,
+        Body=content,
+        ContentType=content_type,
+    )
+
+
+def prepare_meeting_audio(
+    config: WorkerConfig, source_file: dict[str, Any]
+) -> dict[str, Any]:
+    source_bytes = download_s3_object_bytes(config, str(source_file["storage_key"]))
+    source_suffix = "." + file_extension(source_file) if file_extension(source_file) else ".bin"
+    with tempfile.NamedTemporaryFile(suffix=source_suffix, delete=False) as src:
+        src.write(source_bytes)
+        source_path = src.name
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as out:
+        output_path = out.name
+
+    try:
+        _, target_channels, duration = ffprobe_audio_details(source_path)
+        command = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            source_path,
+            "-vn",
+            "-ac",
+            str(target_channels),
+            "-ar",
+            "16000",
+            "-f",
+            "wav",
+            output_path,
+        ]
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode != 0:
+            details = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(f"FFmpeg audio preparation failed: {details or 'unknown error'}")
+        with open(output_path, "rb") as file:
+            audio_bytes = file.read()
+        audio_storage_key = f"meetings/{source_file['meeting_id']}/derived/prepared-audio.wav"
+        upload_s3_object_bytes(
+            config,
+            audio_storage_key,
+            audio_bytes,
+            "audio/x-wav",
+        )
+        return {
+            "audio_storage_key": audio_storage_key,
+            "audio_mime_type": "audio/x-wav",
+            "duration_seconds": int(round(duration)) if duration > 0 else None,
+            "sample_rate": 16000,
+            "channels_count": target_channels,
+            "audio_bytes": audio_bytes,
+            "file_name": "prepared-audio.wav",
+        }
+    finally:
+        try:
+            os.unlink(source_path)
+        except OSError:
+            pass
+        try:
+            os.unlink(output_path)
+        except OSError:
+            pass
+
+
+def transcribe_meeting_with_salutespeech(
+    config: WorkerConfig,
+    prepared_audio: dict[str, Any],
+) -> dict[str, Any]:
+    token = get_salutespeech_access_token(config)
+    request_file_id = salutespeech_upload_file(
+        config,
+        token,
+        str(prepared_audio["file_name"]),
+        prepared_audio["audio_bytes"],
+    )
+    task_id = salutespeech_create_recognition_task(
+        config,
+        token,
+        request_file_id=request_file_id,
+        sample_rate=int(prepared_audio["sample_rate"]),
+        channels_count=int(prepared_audio["channels_count"]),
+    )
+
+    started_at = time.time()
+    last_status_payload: dict[str, Any] | None = None
+    while True:
+        status_payload = salutespeech_get_task_status(config, token, task_id)
+        last_status_payload = status_payload
+        result = status_payload.get("result") or {}
+        status = str(result.get("status") or "").upper()
+        if status == "DONE":
+            response_file_id = str(result.get("response_file_id") or "").strip()
+            if not response_file_id:
+                raise RuntimeError("SaluteSpeech вернул DONE без response_file_id.")
+            result_payload = salutespeech_download_result(config, token, response_file_id)
+            return {
+                "task_id": task_id,
+                "request_file_id": request_file_id,
+                "response_file_id": response_file_id,
+                "status_payload": status_payload,
+                "result_payload": result_payload,
+            }
+        if status == "ERROR":
+            raise RuntimeError(str(result.get("error") or "SaluteSpeech task failed"))
+        if time.time() - started_at > config.salutespeech_timeout_seconds:
+            raise RuntimeError("SaluteSpeech task timed out")
+        time.sleep(max(1.0, config.salutespeech_poll_interval_seconds))
+
+
+def handle_meeting_audio_prepared(
+    conn: psycopg.Connection,
+    config: WorkerConfig,
+    meeting: dict[str, Any],
+    source_file: dict[str, Any],
+) -> dict[str, Any]:
+    prepared = prepare_meeting_audio(config, source_file)
+    conn.execute(
+        """
+        update meeting_source_files
+        set
+          audio_storage_key = %s,
+          audio_mime_type = %s,
+          duration_seconds = %s,
+          processing_status = 'done'
+        where id = %s
+        """,
+        (
+            prepared["audio_storage_key"],
+            prepared["audio_mime_type"],
+            prepared["duration_seconds"],
+            source_file["id"],
+        ),
+    )
+    conn.execute(
+        """
+        update meetings
+        set
+          duration_seconds = %s,
+          updated_at = now()
+        where id = %s
+        """,
+        (prepared["duration_seconds"], meeting["id"]),
+    )
+    return {
+        "audioStorageKey": prepared["audio_storage_key"],
+        "audioMimeType": prepared["audio_mime_type"],
+        "durationSeconds": prepared["duration_seconds"],
+        "sampleRate": prepared["sample_rate"],
+        "channelsCount": prepared["channels_count"],
+    }
+
+
+def handle_meeting_transcript_compiled(
+    conn: psycopg.Connection,
+    config: WorkerConfig,
+    meeting: dict[str, Any],
+    source_file: dict[str, Any],
+) -> dict[str, Any]:
+    prepared = prepare_meeting_audio(config, source_file)
+    raw_result = transcribe_meeting_with_salutespeech(config, prepared)
+    diarized_segments = parse_salutespeech_segments(
+        raw_result["result_payload"]
+    )
+    speakers, segments = upsert_meeting_transcript(conn, meeting["id"], diarized_segments)
+    transcript_markdown = build_meeting_transcript_markdown(
+        str(meeting["title"]),
+        segments,
+    )
+    transcript_json = build_meeting_transcript_json(meeting["id"], speakers, segments)
+
+    ensure_meeting_artifact(
+        conn,
+        meeting["id"],
+        "transcript_compiled",
+        transcript_markdown,
+        transcript_json,
+    )
+    conn.execute(
+        """
+        update meeting_source_files
+        set
+          audio_storage_key = %s,
+          audio_mime_type = %s,
+          duration_seconds = %s,
+          processing_status = 'done'
+        where id = %s
+        """,
+        (
+            prepared["audio_storage_key"],
+            prepared["audio_mime_type"],
+            prepared["duration_seconds"],
+            source_file["id"],
+        ),
+    )
+    conn.execute(
+        """
+        update meetings
+        set
+          duration_seconds = %s,
+          speakers_count = %s,
+          updated_at = now()
+        where id = %s
+        """,
+        (prepared["duration_seconds"], len(speakers), meeting["id"]),
+    )
+    return {
+        "provider": "salutespeech",
+        "model": config.salutespeech_model,
+        "language": config.salutespeech_language,
+        "speakerSeparation": True,
+        "audioStorageKey": prepared["audio_storage_key"],
+        "sampleRate": prepared["sample_rate"],
+        "channelsCount": prepared["channels_count"],
+        "durationSeconds": prepared["duration_seconds"],
+        "speakersCount": len(speakers),
+        "segmentsCount": len(segments),
+        "salutespeech": raw_result,
+    }
+
+
+def handle_meeting_generation_stage(
+    conn: psycopg.Connection,
+    config: WorkerConfig,
+    meeting: dict[str, Any],
+    stage: str,
+) -> dict[str, Any]:
+    transcript_json_artifact = load_meeting_artifact(conn, meeting["id"], "transcript_compiled", "json")
+    if transcript_json_artifact is None:
+        raise RuntimeError("Transcript artifact not found for meeting generation.")
+    transcript_payload = transcript_json_artifact.get("content_json") or {}
+    transcript_data = parse_json(transcript_payload, {})
+    speakers = transcript_data.get("speakers")
+    segments = transcript_data.get("segments")
+    if not isinstance(segments, list) or not segments:
+        raise RuntimeError("Transcript JSON не содержит segments.")
+
+    normalized_segments: list[dict[str, Any]] = []
+    speakers_by_id: dict[str, dict[str, Any]] = {}
+    if isinstance(speakers, list):
+        for speaker in speakers:
+            if isinstance(speaker, dict):
+                speakers_by_id[str(speaker.get("id") or "")] = speaker
+
+    for segment in segments:
+        if not isinstance(segment, dict):
+            continue
+        speaker_id = str(segment.get("speakerId") or "")
+        display_name = str(segment.get("displayName") or "").strip()
+        if not display_name and speaker_id:
+            display_name = str(speakers_by_id.get(speaker_id, {}).get("displayName") or "").strip()
+        normalized_segments.append(
+            {
+                "id": int(segment.get("id") or 0),
+                "speaker_id": speaker_id or None,
+                "speaker_label": str(segment.get("speakerLabel") or ""),
+                "display_name": display_name or "Спикер",
+                "start_ms": int(segment.get("startMs") or 0),
+                "end_ms": int(segment.get("endMs") or 0),
+                "text": str(segment.get("text") or "").strip(),
+                "confidence": segment.get("confidence"),
+            }
+        )
+
+    transcript_input = build_meeting_llm_transcript_input(normalized_segments)
+    llm_result = generate_meeting_markdown_with_llm(
+        config,
+        stage=stage,
+        meeting_title=str(meeting["title"]),
+        transcript_input=transcript_input,
+    )
+    markdown = str(llm_result.get("markdown") or "").strip()
+    if stage == "meeting_actions":
+        content_json = meeting_actions_json_from_llm(llm_result, markdown)
+    else:
+        content_json = {
+            "stage": stage,
+            "markdown": markdown,
+            "shortSummary": str(llm_result.get("shortSummary") or "").strip(),
+        }
+
+    ensure_meeting_artifact(conn, meeting["id"], stage, markdown, content_json)
+    return {
+        "llm": {
+            "provider": llm_result.get("provider"),
+            "model": llm_result.get("model"),
+            "attempts": llm_result.get("attempts"),
+        },
+        "markdownLength": len(markdown),
+        "transcriptSegments": len(normalized_segments),
+    }
+
+
+def queue_next_meeting_job(
+    conn: psycopg.Connection,
+    config: WorkerConfig,
+    meeting_id: str,
+    stage: str,
+) -> dict[str, Any] | None:
+    next_stage_value = next_meeting_stage(stage)
+    if not next_stage_value:
+        return None
+    next_job_id = f"{meeting_id}-{next_stage_value}-{int(time.time() * 1000)}"
+    conn.execute(
+        """
+        insert into meeting_jobs (
+          id, meeting_id, stage, status, payload_json, result_json, error_text, started_at, finished_at, created_at
+        ) values (
+          %s, %s, %s, 'queued', %s::jsonb, null, null, null, null, now()
+        )
+        """,
+        (
+            next_job_id,
+            meeting_id,
+            next_stage_value,
+            json.dumps({"stage": next_stage_value, "trigger": "manual"}, ensure_ascii=False),
+        ),
+    )
+    return {
+        "jobId": next_job_id,
+        "meetingId": meeting_id,
+        "stage": next_stage_value,
+        "trigger": "manual",
+    }
+
+
+def process_meeting_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
+    conn = psycopg.connect(config.postgres_url, row_factory=dict_row, autocommit=True)
+    try:
+        job = load_meeting_job(conn, job_message["jobId"])
+        if job is None:
+            print(
+                json.dumps(
+                    {
+                        "service": "worker",
+                        "status": "skipped",
+                        "reason": "meeting-job-missing",
+                        "jobId": job_message["jobId"],
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return
+
+        if job["status"] == "done":
+            print(
+                json.dumps(
+                    {
+                        "service": "worker",
+                        "status": "skipped",
+                        "reason": "meeting-job-already-done",
+                        "jobId": job_message["jobId"],
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return
+
+        meeting = load_meeting(conn, job["meeting_id"])
+        source_file = load_meeting_source_file(conn, meeting["id"])
+        if source_file is None:
+            raise RuntimeError("Meeting source file not found.")
+
+        metadata: dict[str, Any]
+        next_job_payload: dict[str, Any] | None = None
+
+        with conn.transaction():
+            set_meeting_job_processing(conn, job["id"])
+            conn.execute(
+                """
+                update meeting_source_files
+                set processing_status = 'processing'
+                where id = %s
+                """,
+                (source_file["id"],),
+            )
+            conn.execute(
+                """
+                update meetings
+                set
+                  status = 'processing',
+                  processing_started_at = coalesce(processing_started_at, now()),
+                  processing_finished_at = null,
+                  error_text = null,
+                  updated_at = now()
+                where id = %s
+                """,
+                (meeting["id"],),
+            )
+
+            if job["stage"] == "audio_prepared":
+                metadata = handle_meeting_audio_prepared(conn, config, meeting, source_file)
+            elif job["stage"] == "transcript_compiled":
+                metadata = handle_meeting_transcript_compiled(conn, config, meeting, source_file)
+            else:
+                metadata = handle_meeting_generation_stage(conn, config, meeting, job["stage"])
+
+            set_meeting_job_done(conn, job["id"], job["stage"], metadata)
+            next_job_payload = queue_next_meeting_job(conn, config, meeting["id"], job["stage"])
+
+            if next_job_payload is None:
+                conn.execute(
+                    """
+                    update meetings
+                    set
+                      status = 'completed',
+                      processing_finished_at = now(),
+                      updated_at = now()
+                    where id = %s
+                    """,
+                    (meeting["id"],),
+                )
+
+        if next_job_payload is not None:
+            redis_command(
+                config.redis_url,
+                "LPUSH",
+                config.meeting_job_queue_key,
+                json.dumps(next_job_payload, ensure_ascii=False),
+            )
+
+        print(
+            json.dumps(
+                {
+                    "service": "worker",
+                    "status": "done",
+                    "jobType": "meeting",
+                    "jobId": job["id"],
+                    "meetingId": meeting["id"],
+                    "stage": job["stage"],
+                },
+                ensure_ascii=False,
+            )
+        )
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        try:
+            set_meeting_job_failed(conn, job_message["jobId"], str(exc))
+            conn.execute(
+                """
+                update meetings
+                set
+                  status = 'failed',
+                  error_text = %s,
+                  updated_at = now()
+                where id = %s
+                """,
+                (str(exc), job_message["meetingId"]),
+            )
+            conn.execute(
+                """
+                update meeting_source_files
+                set processing_status = 'failed'
+                where meeting_id = %s
+                """,
+                (job_message["meetingId"],),
+            )
+            conn.commit()
+        except Exception:
+            pass
+        print(
+            json.dumps(
+                {
+                    "service": "worker",
+                    "status": "failed",
+                    "jobType": "meeting",
+                    "error": str(exc),
+                },
+                ensure_ascii=False,
+            )
+        )
+    finally:
+        conn.close()
+
+
 def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
     # Use autocommit mode so `with conn.transaction()` always creates a real
     # top-level transaction. Otherwise prior SELECT opens an implicit outer
@@ -1335,7 +2617,11 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
 def drain_queue(config: WorkerConfig) -> None:
     print(
         json.dumps(
-            {"service": "worker", "config": asdict(config), "queue": config.job_queue_key},
+            {
+                "service": "worker",
+                "config": asdict(config),
+                "queues": [config.job_queue_key, config.meeting_job_queue_key],
+            },
             ensure_ascii=False,
             indent=2,
         )
@@ -1347,6 +2633,7 @@ def drain_queue(config: WorkerConfig) -> None:
                 config.redis_url,
                 "BRPOP",
                 config.job_queue_key,
+                config.meeting_job_queue_key,
                 "5",
                 timeout=6,
             )
@@ -1354,11 +2641,16 @@ def drain_queue(config: WorkerConfig) -> None:
                 print(json.dumps({"service": "worker", "status": "heartbeat"}, ensure_ascii=False))
                 continue
 
+            queue_name = config.job_queue_key
             if isinstance(raw_message, list):
+                queue_name = str(raw_message[0])
                 raw_message = raw_message[-1]
 
             message = json.loads(raw_message)
-            process_job(config, message)
+            if queue_name == config.meeting_job_queue_key:
+                process_meeting_job(config, message)
+            else:
+                process_job(config, message)
         except KeyboardInterrupt:
             print(json.dumps({"service": "worker", "status": "stopped"}, ensure_ascii=False))
             return

@@ -2,6 +2,8 @@
 
 Все внешние маршруты backend доступны под префиксом `/api`.
 
+Примечание: ниже описан реализованный API текущих модулей `courses` и `meetings`. Детальная проектная спецификация по `meetings`, включая worker pipeline и целевую модель данных, вынесена в [Модуль_встреч.md](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/doc/Модуль_встреч.md).
+
 ## Актуальные маршруты
 
 ### Health
@@ -123,6 +125,85 @@
 
 - `POST /api/projects/{id}/jobs/{jobId}/retry`
   Повторно ставит задачу в очередь.
+
+### Meetings
+
+- `POST /api/meetings`
+  Создаёт встречу.
+
+- `GET /api/meetings?page=1&limit=25`
+  Возвращает список встреч с пагинацией.
+
+- `GET /api/meetings/{id}`
+  Возвращает карточку встречи:
+  source file, speakers, segments, jobs и artifacts.
+
+- `PATCH /api/meetings/{id}`
+  Обновляет `title` и `description`.
+
+- `DELETE /api/meetings/{id}`
+  Удаляет встречу.
+
+### Meeting uploads
+
+- `POST /api/meetings/{id}/uploads/init`
+  Инициализирует upload исходного файла встречи.
+
+- `POST /api/meeting-uploads/{uploadId}/parts/sign`
+  Выдаёт signed URL для загрузки части файла.
+
+- `POST /api/meeting-uploads/{uploadId}/complete`
+  Завершает upload.
+
+- `POST /api/meeting-uploads/{uploadId}/abort`
+  Прерывает upload.
+
+### Meeting processing
+
+- `POST /api/meetings/{id}/start`
+  Ставит встречу в очередь обработки с начального шага `audio_prepared`.
+
+- `POST /api/meetings/{id}/generate`
+  Ставит в очередь отдельный этап:
+  `transcript_compiled`, `meeting_summary`, `meeting_protocol`, `meeting_actions`.
+
+- `GET /api/meetings/{id}/status`
+  Возвращает компактный статус встречи.
+
+### Meeting transcript
+
+- `GET /api/meetings/{id}/transcript`
+  Возвращает diarized transcript со speakers и segments.
+
+- `GET /api/meetings/{id}/segments`
+  Возвращает только список сегментов.
+
+- `PATCH /api/meetings/{id}/speakers/{speakerId}`
+  Обновляет отображаемое имя спикера.
+
+### Meeting artifacts
+
+- `GET /api/meetings/{id}/artifacts`
+  Возвращает список артефактов встречи.
+
+- `GET /api/meetings/{id}/artifacts/{artifactId}`
+  Возвращает один артефакт.
+
+- `PUT /api/meetings/{id}/artifacts/{artifactId}`
+  Сохраняет `contentMd` и, при необходимости, `contentJson`.
+
+### Meeting jobs
+
+- `GET /api/meetings/{id}/jobs`
+  Возвращает список задач встречи.
+
+- `POST /api/meetings/{id}/jobs/{jobId}/retry`
+  Повторно ставит задачу встречи в очередь.
+
+### Meeting export
+
+- `GET /api/meetings/{id}/download`
+  Возвращает список доступных экспортов встречи.
 
 ## Формат ответа
 

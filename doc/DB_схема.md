@@ -2,6 +2,8 @@
 
 Документ отражает текущую схему, которую сервис создаёт в [apps/api/src/db/postgres.service.ts](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/apps/api/src/db/postgres.service.ts).
 
+Для модуля `meetings` ниже перечислены уже добавленные backend-таблицы. Детальная проектная спецификация и правила их использования описаны в [Модуль_встреч.md](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/doc/Модуль_встреч.md).
+
 ## Таблица `projects`
 
 - `id` `text`, PK
@@ -133,3 +135,116 @@
 - `approved_at` `timestamptz`
 
 Примечание: таблица уже есть в схеме и используется store-слоем, но отдельный HTTP endpoint подтверждения этапа пока не опубликован.
+
+## Таблица `meetings`
+
+- `id` `text`, PK
+- `title` `text`
+- `description` `text`
+- `status` `text`
+- `language` `text`
+- `duration_seconds` `integer`, nullable
+- `speakers_count` `integer`
+- `processing_started_at` `timestamptz`, nullable
+- `processing_finished_at` `timestamptz`, nullable
+- `error_text` `text`, nullable
+- `created_at` `timestamptz`
+- `updated_at` `timestamptz`
+
+Допустимые `status`:
+
+- `draft`
+- `uploaded`
+- `processing`
+- `completed`
+- `failed`
+
+## Таблица `meeting_source_files`
+
+- `id` `text`, PK
+- `meeting_id` `text`, FK -> `meetings.id`
+- `original_name` `text`
+- `mime_type` `text`
+- `size_bytes` `bigint`
+- `storage_key` `text`
+- `upload_status` `text`
+- `processing_status` `text`
+- `duration_seconds` `integer`, nullable
+- `audio_storage_key` `text`, nullable
+- `audio_mime_type` `text`, nullable
+- `created_at` `timestamptz`
+
+Ограничение:
+
+- `UNIQUE (meeting_id)`
+
+## Таблица `meeting_upload_sessions`
+
+- `id` `text`, PK
+- `meeting_id` `text`, FK -> `meetings.id`
+- `source_file_id` `text`, FK -> `meeting_source_files.id`
+- `s3_upload_id` `text`
+- `status` `text`
+- `created_at` `timestamptz`
+- `completed_at` `timestamptz`, nullable
+- `bucket` `text`
+- `storage_key` `text`
+- `original_name` `text`
+- `mime_type` `text`
+- `size_bytes` `bigint`
+
+## Таблица `meeting_jobs`
+
+- `id` `text`, PK
+- `meeting_id` `text`, FK -> `meetings.id`
+- `stage` `text`
+- `status` `text`
+- `payload_json` `jsonb`
+- `result_json` `jsonb`, nullable
+- `error_text` `text`, nullable
+- `started_at` `timestamptz`, nullable
+- `finished_at` `timestamptz`, nullable
+- `created_at` `timestamptz`
+
+Допустимые `stage`:
+
+- `audio_prepared`
+- `transcript_compiled`
+- `meeting_summary`
+- `meeting_protocol`
+- `meeting_actions`
+
+## Таблица `meeting_speakers`
+
+- `id` `text`, PK
+- `meeting_id` `text`, FK -> `meetings.id`
+- `speaker_label` `text`
+- `display_name` `text`
+- `is_user_edited` `boolean`
+- `sort_order` `integer`
+- `created_at` `timestamptz`
+- `updated_at` `timestamptz`
+
+## Таблица `meeting_speaker_segments`
+
+- `id` `bigserial`, PK
+- `meeting_id` `text`, FK -> `meetings.id`
+- `speaker_id` `text`, FK -> `meeting_speakers.id`, nullable
+- `speaker_label` `text`
+- `start_ms` `integer`
+- `end_ms` `integer`
+- `text` `text`
+- `confidence` `numeric`, nullable
+- `provider_payload_json` `jsonb`
+- `created_at` `timestamptz`
+
+## Таблица `meeting_artifacts`
+
+- `id` `text`, PK
+- `meeting_id` `text`, FK -> `meetings.id`
+- `stage` `text`
+- `format` `text`
+- `content_md` `text`
+- `content_json` `jsonb`
+- `created_at` `timestamptz`
+- `updated_at` `timestamptz`

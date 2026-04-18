@@ -151,6 +151,123 @@ CREATE TABLE IF NOT EXISTS stage_reviews (
 
 CREATE INDEX IF NOT EXISTS stage_reviews_project_stage_idx
   ON stage_reviews (project_id, stage);
+
+CREATE TABLE IF NOT EXISTS meetings (
+  id text PRIMARY KEY,
+  title text NOT NULL,
+  description text NOT NULL DEFAULT '',
+  status text NOT NULL CHECK (status IN ('draft', 'uploaded', 'processing', 'completed', 'failed')),
+  language text NOT NULL DEFAULT 'ru' CHECK (language IN ('ru')),
+  duration_seconds integer NULL,
+  speakers_count integer NOT NULL DEFAULT 0 CHECK (speakers_count >= 0),
+  processing_started_at timestamptz NULL,
+  processing_finished_at timestamptz NULL,
+  error_text text NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS meeting_source_files (
+  id text PRIMARY KEY,
+  meeting_id text NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  original_name text NOT NULL,
+  mime_type text NOT NULL,
+  size_bytes bigint NOT NULL CHECK (size_bytes >= 0),
+  storage_key text NOT NULL,
+  upload_status text NOT NULL CHECK (upload_status IN ('initiated', 'uploading', 'completed', 'aborted')),
+  processing_status text NOT NULL CHECK (processing_status IN ('pending', 'queued', 'processing', 'done', 'failed')),
+  duration_seconds integer NULL,
+  audio_storage_key text NULL,
+  audio_mime_type text NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (meeting_id)
+);
+
+CREATE TABLE IF NOT EXISTS meeting_upload_sessions (
+  id text PRIMARY KEY,
+  meeting_id text NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  source_file_id text NOT NULL REFERENCES meeting_source_files(id) ON DELETE CASCADE,
+  s3_upload_id text NOT NULL,
+  status text NOT NULL CHECK (status IN ('initiated', 'uploading', 'completed', 'aborted')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  completed_at timestamptz NULL,
+  bucket text NOT NULL,
+  storage_key text NOT NULL,
+  original_name text NOT NULL,
+  mime_type text NOT NULL,
+  size_bytes bigint NOT NULL CHECK (size_bytes >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS meeting_upload_sessions_meeting_status_idx
+  ON meeting_upload_sessions (meeting_id, status);
+
+CREATE TABLE IF NOT EXISTS meeting_jobs (
+  id text PRIMARY KEY,
+  meeting_id text NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  stage text NOT NULL CHECK (stage IN ('audio_prepared', 'transcript_compiled', 'meeting_summary', 'meeting_protocol', 'meeting_actions')),
+  status text NOT NULL CHECK (status IN ('queued', 'processing', 'done', 'failed')),
+  payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  result_json jsonb NULL,
+  error_text text NULL,
+  started_at timestamptz NULL,
+  finished_at timestamptz NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS meeting_jobs_meeting_created_idx
+  ON meeting_jobs (meeting_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS meeting_jobs_meeting_stage_status_idx
+  ON meeting_jobs (meeting_id, stage, status);
+
+CREATE TABLE IF NOT EXISTS meeting_speakers (
+  id text PRIMARY KEY,
+  meeting_id text NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  speaker_label text NOT NULL,
+  display_name text NOT NULL,
+  is_user_edited boolean NOT NULL DEFAULT false,
+  sort_order integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (meeting_id, speaker_label)
+);
+
+CREATE INDEX IF NOT EXISTS meeting_speakers_meeting_sort_idx
+  ON meeting_speakers (meeting_id, sort_order);
+
+CREATE TABLE IF NOT EXISTS meeting_speaker_segments (
+  id bigserial PRIMARY KEY,
+  meeting_id text NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  speaker_id text NULL REFERENCES meeting_speakers(id) ON DELETE SET NULL,
+  speaker_label text NOT NULL,
+  start_ms integer NOT NULL CHECK (start_ms >= 0),
+  end_ms integer NOT NULL CHECK (end_ms >= start_ms),
+  text text NOT NULL,
+  confidence numeric NULL,
+  provider_payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS meeting_segments_meeting_start_idx
+  ON meeting_speaker_segments (meeting_id, start_ms);
+
+CREATE INDEX IF NOT EXISTS meeting_segments_meeting_speaker_idx
+  ON meeting_speaker_segments (meeting_id, speaker_label);
+
+CREATE TABLE IF NOT EXISTS meeting_artifacts (
+  id text PRIMARY KEY,
+  meeting_id text NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  stage text NOT NULL CHECK (stage IN ('transcript_compiled', 'meeting_summary', 'meeting_protocol', 'meeting_actions')),
+  format text NOT NULL CHECK (format IN ('md', 'json')),
+  content_md text NOT NULL DEFAULT '',
+  content_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (meeting_id, stage, format)
+);
+
+CREATE INDEX IF NOT EXISTS meeting_artifacts_meeting_stage_format_idx
+  ON meeting_artifacts (meeting_id, stage, format);
 `
 
 function progressForStage(stage: StageId, status: ProjectStatus) {
