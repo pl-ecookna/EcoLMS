@@ -10,6 +10,7 @@ export default async function MeetingsPage({
   searchParams?: {
     page?: string
     meeting?: string
+    info?: string
   }
 }) {
   const pageParam = Number(searchParams?.page ?? 1)
@@ -29,6 +30,7 @@ export default async function MeetingsPage({
       pageData={pageData}
       selectedMeetingId={selectedMeetingIdResolved}
       selectedMeeting={selectedMeeting}
+      showInfoSheet={searchParams?.info === "1"}
     />
   )
 }

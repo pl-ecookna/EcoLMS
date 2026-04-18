@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation"
 import { useMemo, useState } from "react"
 import {
   ArrowLeftIcon,
-  CalendarClockIcon,
   CopyIcon,
   DownloadIcon,
   FileTextIcon,
@@ -13,11 +12,9 @@ import {
   InfoIcon,
   RefreshCwIcon,
   SaveIcon,
-  ScrollTextIcon,
   SparklesIcon,
   SquarePenIcon,
   MoreHorizontalIcon,
-  UsersIcon,
   VideoIcon,
   WandSparklesIcon,
   Trash2Icon,
@@ -49,6 +46,13 @@ import {
 } from "@/components/ui/pagination"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
@@ -104,23 +108,6 @@ function formatDuration(seconds: number | null | undefined) {
   }
 
   return `${restMinutes} мин ${restSeconds.toString().padStart(2, "0")} с`
-}
-
-function formatBytes(bytes: number | null | undefined) {
-  if (bytes == null) {
-    return "—"
-  }
-
-  if (bytes < 1024) {
-    return `${bytes} Б`
-  }
-
-  const kb = bytes / 1024
-  if (kb < 1024) {
-    return `${kb.toFixed(1)} КБ`
-  }
-
-  return `${(kb / 1024).toFixed(1)} МБ`
 }
 
 function meetingStatusLabel(status: MeetingStatus) {
@@ -205,21 +192,6 @@ function normalizeMarkdownSection(text: string, fallback: string) {
   return trimmed.length > 0 ? trimmed : fallback
 }
 
-function buildTranscriptMarkdown(meeting: MeetingDetailRecord) {
-  if (meeting.segments.length === 0) {
-    return "_Транскрипт пуст._"
-  }
-
-  return meeting.segments
-    .map((segment) => {
-      const speaker = segment.displayName || segment.speakerLabel
-      const start = Math.floor(segment.startMs / 1000)
-      const end = Math.floor(segment.endMs / 1000)
-      return `- **${speaker}** [${start}s–${end}s]: ${segment.text || "—"}`
-    })
-    .join("\n")
-}
-
 type ActionItem = {
   text?: string
   title?: string
@@ -239,46 +211,187 @@ function getActionsItems(meeting: MeetingDetailRecord | null) {
   return actionItems as ActionItem[]
 }
 
-function buildCombinedMarkdown(meeting: MeetingDetailRecord) {
-  const transcript = normalizeMarkdownSection(
-    getArtifact(meeting, "transcript_compiled")?.contentMd ?? "",
-    buildTranscriptMarkdown(meeting)
-  )
+function formatActionItem(item: ActionItem) {
+  const text = item.title?.trim() || item.text?.trim() || "Поручение"
+  const details = [item.assignee?.trim(), item.deadline?.trim()]
+    .filter(Boolean)
+    .map((value, index) => {
+      if (index === 0) {
+        return `ответственный: ${value}`
+      }
+      return `дедлайн: ${value}`
+    })
+
+  if (details.length === 0) {
+    return `- ${text}`
+  }
+
+  return `- ${text} (${details.join(", ")})`
+}
+
+function buildReadableMarkdown(meeting: MeetingDetailRecord) {
   const summary = normalizeMarkdownSection(
     getArtifact(meeting, "meeting_summary")?.contentMd ?? "",
-    "_Сводка отсутствует._"
+    "_Саммари отсутствует._"
   )
   const protocol = normalizeMarkdownSection(
     getArtifact(meeting, "meeting_protocol")?.contentMd ?? "",
     "_Протокол отсутствует._"
   )
-  const actions = normalizeMarkdownSection(
-    getArtifact(meeting, "meeting_actions")?.contentMd ?? "",
-    "_Действия отсутствуют._"
-  )
+  const actionItems = getActionsItems(meeting)
+  const actions = actionItems.length
+    ? actionItems.map(formatActionItem).join("\n")
+    : normalizeMarkdownSection(
+        getArtifact(meeting, "meeting_actions")?.contentMd ?? "",
+        "_Поручения отсутствуют._"
+      )
 
   return [
     `# ${meeting.title}`,
     meeting.description ? meeting.description : "",
-    `- Статус: ${meetingStatusLabel(meeting.status)}`,
-    `- Создано: ${formatDateTime(meeting.createdAt)}`,
-    `- Обновлено: ${formatDateTime(meeting.updatedAt)}`,
-    `- Длительность: ${formatDuration(meeting.durationSeconds)}`,
     "",
-    "## Транскрипт",
-    transcript,
-    "",
-    "## Сводка",
+    "## Саммари",
     summary,
     "",
     "## Протокол",
     protocol,
     "",
-    "## Действия",
+    "## Поручения",
     actions,
   ]
     .filter(Boolean)
     .join("\n")
+}
+
+function buildMeetingInfoUrl(meetingId: string, currentPage: number) {
+  return `/meetings?page=${currentPage}&meeting=${meetingId}&info=1`
+}
+
+function MeetingInfoSheet({
+  meeting,
+  open,
+  onOpenChange,
+}: {
+  meeting: MeetingDetailRecord | null
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  if (!meeting) {
+    return null
+  }
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="right" className="sm:max-w-[980px]">
+        <SheetHeader className="border-b px-6 py-5">
+          <SheetTitle>Информация о встрече</SheetTitle>
+          <SheetDescription>
+            Технические детали, артефакты и история обработки.
+          </SheetDescription>
+        </SheetHeader>
+        <ScrollArea className="flex-1">
+          <div className="flex flex-col gap-6 p-6">
+            <Card>
+              <CardHeader className="border-b">
+                <CardTitle className="truncate">{meeting.title}</CardTitle>
+                <CardDescription>
+                  {meeting.description || "Описание не заполнено."}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-2xl border p-4">
+                  <div className="text-sm text-muted-foreground">Статус</div>
+                  <div className="mt-2">
+                    <StatusBadge status={meeting.status} />
+                  </div>
+                </div>
+                <div className="rounded-2xl border p-4">
+                  <div className="text-sm text-muted-foreground">Спикеров</div>
+                  <div className="mt-2 text-2xl font-semibold">{meeting.speakersCount}</div>
+                </div>
+                <div className="rounded-2xl border p-4">
+                  <div className="text-sm text-muted-foreground">Длительность</div>
+                  <div className="mt-2 text-2xl font-semibold">
+                    {formatDuration(meeting.durationSeconds)}
+                  </div>
+                </div>
+                <div className="rounded-2xl border p-4">
+                  <div className="text-sm text-muted-foreground">Источник</div>
+                  <div className="mt-2 text-sm font-medium">
+                    {sourceFileLabel(meeting)}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="border-b">
+                <CardTitle>Jobs</CardTitle>
+                <CardDescription>Служебная история этапов обработки встречи.</CardDescription>
+              </CardHeader>
+              <CardContent className="p-0">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Этап</TableHead>
+                      <TableHead>Статус</TableHead>
+                      <TableHead>Запуск</TableHead>
+                      <TableHead>Завершение</TableHead>
+                      <TableHead>Ошибка</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {meeting.jobs.map((job) => (
+                      <TableRow key={job.id}>
+                        <TableCell>{stageTitle(job.stage)}</TableCell>
+                        <TableCell>
+                          <StatusBadge status={job.status} />
+                        </TableCell>
+                        <TableCell>{formatDateTime(job.startedAt)}</TableCell>
+                        <TableCell>{formatDateTime(job.finishedAt)}</TableCell>
+                        <TableCell className="max-w-[360px] text-sm text-muted-foreground">
+                          {job.errorText || "—"}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="border-b">
+                <CardTitle>Артефакты</CardTitle>
+                <CardDescription>Промежуточные и итоговые материалы обработки.</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-4 p-4">
+                {meeting.artifacts.map((artifact) => (
+                  <Card key={artifact.id} size="sm">
+                    <CardHeader className="border-b">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <CardTitle>{stageTitle(artifact.stage)}</CardTitle>
+                          <CardDescription>{artifact.format.toUpperCase()}</CardDescription>
+                        </div>
+                        <Badge variant="outline">{artifact.id}</Badge>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="pt-4">
+                      <Textarea
+                        readOnly
+                        value={artifact.contentMd || JSON.stringify(artifact.contentJson, null, 2)}
+                        className="min-h-[220px] font-mono text-xs leading-6"
+                      />
+                    </CardContent>
+                  </Card>
+                ))}
+              </CardContent>
+            </Card>
+          </div>
+        </ScrollArea>
+      </SheetContent>
+    </Sheet>
+  )
 }
 
 function markdownComponents() {
@@ -385,11 +498,13 @@ export function MeetingsWorkspaceView({
   pageData,
   selectedMeetingId,
   selectedMeeting,
+  showInfoSheet,
 }: {
   currentPage: number
   pageData: PaginatedMeetings
   selectedMeetingId: string | null
   selectedMeeting: MeetingDetailRecord | null
+  showInfoSheet: boolean
 }) {
   const router = useRouter()
   const stats = useMemo(() => {
@@ -495,9 +610,6 @@ export function MeetingsWorkspaceView({
                               <div className="line-clamp-2 text-sm text-muted-foreground">
                                 {meeting.description || "Описание не заполнено"}
                               </div>
-                              <div className="text-xs text-muted-foreground">
-                                {meeting.id}
-                              </div>
                             </Link>
                             <div className="flex items-start gap-2">
                               <StatusBadge status={meeting.status} />
@@ -513,14 +625,16 @@ export function MeetingsWorkspaceView({
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent align="end" className="min-w-56">
                                   <DropdownMenuItem
-                                    onClick={() => router.push(`/meetings/${meeting.id}`)}
+                                    onClick={() =>
+                                      router.push(buildMeetingInfoUrl(meeting.id, currentPage))
+                                    }
                                     className="items-start gap-3 py-2"
                                   >
                                     <InfoIcon className="mt-0.5 size-4" />
                                     <div className="space-y-0.5">
                                       <div className="font-medium">Информация</div>
                                       <div className="text-xs text-muted-foreground">
-                                        Открыть детальную страницу встречи.
+                                        Открыть технические детали и историю обработки.
                                       </div>
                                     </div>
                                   </DropdownMenuItem>
@@ -643,19 +757,37 @@ export function MeetingsWorkspaceView({
                 </ScrollArea>
               ) : (
                 <div className="flex h-full min-h-[680px] items-center justify-center p-8 text-center">
-                  <div className="max-w-md space-y-2">
-                    <h2 className="text-xl font-semibold">Выберите встречу</h2>
-                    <p className="text-sm text-muted-foreground">
-                      Слева доступен список встреч. После выбора здесь откроются транскрипт,
-                      markdown и история обработки.
-                    </p>
-                  </div>
+                <div className="max-w-md space-y-2">
+                  <h2 className="text-xl font-semibold">Выберите встречу</h2>
+                  <p className="text-sm text-muted-foreground">
+                    Слева доступен список встреч. После выбора здесь откроются транскрипт,
+                    markdown и история обработки.
+                  </p>
                 </div>
-              )}
+              </div>
+            )}
             </CardContent>
           </Card>
         </section>
       </div>
+      <MeetingInfoSheet
+        meeting={selectedMeeting}
+        open={showInfoSheet && Boolean(selectedMeeting)}
+        onOpenChange={(open) => {
+          if (open) {
+            return
+          }
+
+          const params = new URLSearchParams({
+            page: String(currentPage),
+          })
+          if (selectedMeetingId) {
+            params.set("meeting", selectedMeetingId)
+          }
+          router.replace(`/meetings?${params.toString()}`)
+          router.refresh()
+        }}
+      />
     </div>
   )
 }
@@ -704,8 +836,7 @@ export function MeetingDetailView({
     }
   }, [initialMeeting, speakerOverrides])
 
-  const combinedMarkdown = useMemo(() => buildCombinedMarkdown(meeting), [meeting])
-  const actionItems = useMemo(() => getActionsItems(meeting), [meeting])
+  const combinedMarkdown = useMemo(() => buildReadableMarkdown(meeting), [meeting])
 
   const handleSaveSpeaker = async (speaker: MeetingSpeakerRecord) => {
     const draft = speakerDrafts[speaker.id]?.trim()
@@ -795,68 +926,6 @@ export function MeetingDetailView({
           </Alert>
         ) : null}
 
-        <section className="overflow-hidden rounded-3xl border bg-card/80 shadow-sm backdrop-blur">
-          <div className="flex flex-col gap-6 p-6 lg:flex-row lg:items-start lg:justify-between">
-            <div className="max-w-4xl">
-              <Badge variant="secondary" className="mb-3">
-                <ScrollTextIcon data-icon="inline-start" />
-                Встреча {meeting.id}
-              </Badge>
-              <h1 className="text-3xl font-semibold tracking-tight">{meeting.title}</h1>
-              <p className="mt-3 max-w-3xl text-sm leading-7 text-muted-foreground">
-                {meeting.description || "Описание не заполнено."}
-              </p>
-
-              <div className="mt-5 flex flex-wrap gap-2">
-                <StatusBadge status={meeting.status} />
-                <Badge variant="outline">
-                  <CalendarClockIcon data-icon="inline-start" />
-                  {formatDateTime(meeting.createdAt)}
-                </Badge>
-                <Badge variant="outline">
-                  <UsersIcon data-icon="inline-start" />
-                  {meeting.speakersCount} спик.
-                </Badge>
-                <Badge variant="outline">
-                  <FileTextIcon data-icon="inline-start" />
-                  {formatDuration(meeting.durationSeconds)}
-                </Badge>
-                <Badge variant="outline">
-                  <VideoIcon data-icon="inline-start" />
-                  {sourceFileLabel(meeting)}
-                </Badge>
-              </div>
-            </div>
-
-            <div className="grid min-w-[280px] gap-3 sm:grid-cols-2 lg:w-[360px]">
-              <Card size="sm">
-                <CardHeader className="pb-2">
-                  <CardDescription>Старт обработки</CardDescription>
-                  <CardTitle>{formatDateTime(meeting.processingStartedAt)}</CardTitle>
-                </CardHeader>
-              </Card>
-              <Card size="sm">
-                <CardHeader className="pb-2">
-                  <CardDescription>Финиш обработки</CardDescription>
-                  <CardTitle>{formatDateTime(meeting.processingFinishedAt)}</CardTitle>
-                </CardHeader>
-              </Card>
-              <Card size="sm">
-                <CardHeader className="pb-2">
-                  <CardDescription>Файл</CardDescription>
-                  <CardTitle>{formatBytes(meeting.sourceFile?.sizeBytes)}</CardTitle>
-                </CardHeader>
-              </Card>
-              <Card size="sm">
-                <CardHeader className="pb-2">
-                  <CardDescription>Последнее обновление</CardDescription>
-                  <CardTitle>{formatDateTime(meeting.updatedAt)}</CardTitle>
-                </CardHeader>
-              </Card>
-            </div>
-          </div>
-        </section>
-
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-col gap-4">
           <TabsList className="w-full justify-start overflow-x-auto">
             <TabsTrigger value="markdown">
@@ -871,23 +940,14 @@ export function MeetingDetailView({
               <SquarePenIcon data-icon="inline-start" />
               Спикеры
             </TabsTrigger>
-            <TabsTrigger value="artifacts">
-              <WandSparklesIcon data-icon="inline-start" />
-              Артефакты
-            </TabsTrigger>
-            <TabsTrigger value="jobs">
-              <RefreshCwIcon data-icon="inline-start" />
-              Jobs
-            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="markdown" className="space-y-4">
             <Card>
               <CardHeader className="border-b">
-                <CardTitle>Единый markdown-файл</CardTitle>
+                <CardTitle>Человекочитаемый markdown</CardTitle>
                 <CardDescription>
-                  На этой вкладке собраны transcript, summary, protocol и actions в
-                  один текстовый файл встречи.
+                  На этой вкладке собраны саммари, протокол и поручения без технических деталей.
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col gap-4 p-4">
@@ -1037,106 +1097,6 @@ export function MeetingDetailView({
                             )}
                             Сохранить
                           </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="artifacts" className="space-y-4">
-            <Card>
-              <CardHeader className="border-b">
-                <CardTitle>Артефакты встречи</CardTitle>
-                <CardDescription>
-                  Один Markdown на встречу, но в базе остаются отдельные служебные
-                  артефакты этапов.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="grid gap-4 p-4 lg:grid-cols-2">
-                {meeting.artifacts.map((artifact) => (
-                  <Card key={artifact.id} size="sm">
-                    <CardHeader className="border-b">
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <CardTitle>{stageTitle(artifact.stage)}</CardTitle>
-                          <CardDescription>{artifact.format.toUpperCase()}</CardDescription>
-                        </div>
-                        <Badge variant="outline">{artifact.id}</Badge>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="pt-4">
-                      <Textarea
-                        readOnly
-                        value={artifact.contentMd || JSON.stringify(artifact.contentJson, null, 2)}
-                        className="min-h-[220px] font-mono text-xs leading-6"
-                      />
-                    </CardContent>
-                  </Card>
-                ))}
-              </CardContent>
-            </Card>
-
-            {actionItems.length > 0 ? (
-              <Card>
-                <CardHeader className="border-b">
-                  <CardTitle>Структурированные action items</CardTitle>
-                  <CardDescription>
-                    Если в речи явно прозвучали ответственный и дедлайн, их можно
-                    отобразить отдельно.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="p-4">
-                  <div className="flex flex-col gap-3">
-                    {actionItems.map((item, index) => (
-                      <div key={index} className="rounded-xl border p-4">
-                        <div className="text-sm font-medium">
-                          {item.text || item.title || "Пункт"}
-                        </div>
-                        <div className="mt-2 grid gap-2 text-sm text-muted-foreground">
-                          {item.assignee ? <div>Ответственный: {item.assignee}</div> : null}
-                          {item.deadline ? <div>Дедлайн: {item.deadline}</div> : null}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
-            ) : null}
-          </TabsContent>
-
-          <TabsContent value="jobs" className="space-y-4">
-            <Card>
-              <CardHeader className="border-b">
-                <CardTitle>История job-ов</CardTitle>
-                <CardDescription>
-                  Очередь обработки встреч и итоговые статусы этапов.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="p-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Этап</TableHead>
-                      <TableHead>Статус</TableHead>
-                      <TableHead>Запуск</TableHead>
-                      <TableHead>Завершение</TableHead>
-                      <TableHead>Ошибка</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {meeting.jobs.map((job) => (
-                      <TableRow key={job.id}>
-                        <TableCell>{stageTitle(job.stage)}</TableCell>
-                        <TableCell>
-                          <StatusBadge status={job.status} />
-                        </TableCell>
-                        <TableCell>{formatDateTime(job.startedAt)}</TableCell>
-                        <TableCell>{formatDateTime(job.finishedAt)}</TableCell>
-                        <TableCell className="max-w-[360px] text-sm text-muted-foreground">
-                          {job.errorText || "—"}
                         </TableCell>
                       </TableRow>
                     ))}
