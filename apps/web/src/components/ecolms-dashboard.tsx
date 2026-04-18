@@ -77,7 +77,6 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
-import { PromptEditorDialog } from "@/components/prompt-editor-dialog"
 import { cn } from "@/lib/utils"
 
 import {
@@ -406,7 +405,6 @@ export function EcolmsDashboard() {
   const [sourcePreviewError, setSourcePreviewError] = useState<string | null>(null)
   const [sourcePreviewProjectName, setSourcePreviewProjectName] = useState("")
   const [sourcePreviewContent, setSourcePreviewContent] = useState("")
-  const [promptsOpen, setPromptsOpen] = useState(false)
   const [alerts, setAlerts] = useState<UiAlert[]>([])
 
   const totalPages = Math.max(1, Math.ceil(projectTotal / PAGE_SIZE))
@@ -1175,10 +1173,13 @@ export function EcolmsDashboard() {
               </HoverCardContent>
             </HoverCard>
             <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={() => setPromptsOpen(true)}>
+              <Link
+                href="/prompts?module=lms&from=lms"
+                className={buttonVariants({ variant: "outline", size: "sm" })}
+              >
                 <PencilIcon data-icon="inline-start" />
                 Промпты
-              </Button>
+              </Link>
               <Link href="/meetings" className={buttonVariants({ variant: "outline", size: "sm" })}>
                 Модуль встреч
               </Link>
@@ -1969,12 +1970,6 @@ export function EcolmsDashboard() {
           </SheetFooter>
         </SheetContent>
       </Sheet>
-      <PromptEditorDialog
-        open={promptsOpen}
-        onOpenChange={setPromptsOpen}
-        preferredModule="lms"
-      />
-
       <div className="pointer-events-none fixed bottom-4 right-4 z-[70] flex w-[min(92vw,420px)] flex-col items-end gap-2">
         {alerts.map((item) => (
           <Alert

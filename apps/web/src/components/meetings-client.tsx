@@ -77,7 +77,6 @@ import {
   HoverCardContent,
   HoverCardTrigger,
 } from "@/components/ui/hover-card"
-import { PromptEditorDialog } from "@/components/prompt-editor-dialog"
 import {
   meetingStageLabels,
   type MeetingArtifactRecord,
@@ -614,7 +613,6 @@ export function MeetingsWorkspaceView({
   const meetingFileInputRef = useRef<HTMLInputElement | null>(null)
   const [alerts, setAlerts] = useState<UiAlert[]>([])
   const [systemHealth, setSystemHealth] = useState<SystemHealthRecord | null>(null)
-  const [promptsOpen, setPromptsOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [meetingTitle, setMeetingTitle] = useState("")
   const [meetingDescription, setMeetingDescription] = useState("")
@@ -859,7 +857,12 @@ export function MeetingsWorkspaceView({
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => setPromptsOpen(true)}>
+            <Button
+              variant="outline"
+              size="sm"
+              nativeButton={false}
+              render={<Link href="/prompts?module=meetings&from=meetings" />}
+            >
               <SquarePenIcon data-icon="inline-start" />
               Промпты
             </Button>
@@ -1297,11 +1300,6 @@ export function MeetingsWorkspaceView({
           router.replace(`/meetings?${params.toString()}`)
           router.refresh()
         }}
-      />
-      <PromptEditorDialog
-        open={promptsOpen}
-        onOpenChange={setPromptsOpen}
-        preferredModule="meetings"
       />
       <div className="pointer-events-none fixed bottom-4 right-4 z-[70] flex w-[min(92vw,420px)] flex-col items-end gap-2">
         {alerts.map((item) => (
