@@ -192,4 +192,8 @@ Browser
 и могут собрать OAuth Basic key из `SBER_CLIENT_ID` + `SBER_CLIENT_SECRET`, если
 `SALUTESPEECH_AUTH_KEY` не задан.
 
+Если используется `SALUTESPEECH_CA_CERT_PATH=certs/russiantrustedca.pem`, каталог
+`certs/` должен быть скопирован в runtime-образ `worker`, иначе этап
+`transcript_compiled` завершится системной ошибкой `[Errno 2] No such file or directory`.
+
 Полный пример находится в [.env.example](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/.env.example).

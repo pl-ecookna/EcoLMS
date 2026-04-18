@@ -13,6 +13,7 @@ RUN python -m venv "$VIRTUAL_ENV" \
   && pip install --no-cache-dir --upgrade pip setuptools wheel
 
 COPY apps/worker ./apps/worker
+COPY certs ./certs
 
 RUN pip install --no-cache-dir ./apps/worker
 
