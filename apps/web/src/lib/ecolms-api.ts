@@ -497,8 +497,57 @@ export async function listMeetings(page: number, limit: number) {
   return requestJson<PaginatedMeetings>(`/api/meetings?page=${page}&limit=${limit}`)
 }
 
+export async function createMeeting(input: { title?: string; description?: string }) {
+  return requestJson<MeetingDetailRecord>(`/api/meetings`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  })
+}
+
 export async function getMeeting(meetingId: string) {
   return requestJson<MeetingDetailRecord>(`/api/meetings/${meetingId}`)
+}
+
+export async function initMeetingUpload(
+  meetingId: string,
+  input: {
+    fileName: string
+    fileSize: number
+    mimeType: string
+  }
+) {
+  return requestJson<UploadInitResponse>(`/api/meetings/${meetingId}/uploads/init`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  })
+}
+
+export async function signMeetingUploadPart(uploadId: string, partNumber: number) {
+  return requestJson<SignedUploadPart>(`/api/meeting-uploads/${uploadId}/parts/sign`, {
+    method: "POST",
+    body: JSON.stringify({ partNumber }),
+  })
+}
+
+export async function completeMeetingUpload(uploadId: string) {
+  return requestJson<CompletedUpload>(`/api/meeting-uploads/${uploadId}/complete`, {
+    method: "POST",
+  })
+}
+
+export async function abortMeetingUpload(uploadId: string) {
+  return requestJson<AbortedUpload>(`/api/meeting-uploads/${uploadId}/abort`, {
+    method: "POST",
+  })
+}
+
+export async function startMeeting(meetingId: string) {
+  return requestJson<{ meeting: MeetingDetailRecord; job: MeetingJobRecord }>(
+    `/api/meetings/${meetingId}/start`,
+    {
+      method: "POST",
+    }
+  )
 }
 
 export async function deleteMeeting(meetingId: string) {

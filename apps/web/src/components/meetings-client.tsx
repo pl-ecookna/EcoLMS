@@ -2,12 +2,13 @@
 
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { useEffect, useMemo, useState } from "react"
+import { type DragEvent, useEffect, useMemo, useRef, useState } from "react"
 import {
   ArrowLeftIcon,
   CopyIcon,
   DownloadIcon,
   FileTextIcon,
+  PlusIcon,
   Loader2Icon,
   InfoIcon,
   RefreshCwIcon,
@@ -16,9 +17,11 @@ import {
   SquarePenIcon,
   MoreHorizontalIcon,
   VideoIcon,
+  UploadIcon,
   WandSparklesIcon,
   Trash2Icon,
   XCircleIcon,
+  XIcon,
 } from "lucide-react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -50,9 +53,11 @@ import {
   Sheet,
   SheetContent,
   SheetDescription,
+  SheetFooter,
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
+import { Progress, ProgressLabel, ProgressValue } from "@/components/ui/progress"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
@@ -72,7 +77,13 @@ import {
   type MeetingStageId,
   type MeetingStatus,
   type PaginatedMeetings,
+  abortMeetingUpload,
+  completeMeetingUpload,
+  createMeeting,
   deleteMeeting,
+  initMeetingUpload,
+  signMeetingUploadPart,
+  startMeeting,
   updateMeetingSpeaker,
 } from "@/lib/ecolms-api"
 
@@ -493,6 +504,14 @@ function downloadText(filename: string, content: string) {
   URL.revokeObjectURL(url)
 }
 
+const MEETING_FILE_ACCEPT =
+  "audio/*,video/*,.webm,.mp4,.mov,.m4a,.mp3,.wav,.ogg,.opus"
+const DEFAULT_MEETING_PART_SIZE_BYTES = 5 * 1024 * 1024
+
+function meetingTitleFromFile(file: File) {
+  return file.name.replace(/\.[^.]+$/, "").trim()
+}
+
 export function MeetingsWorkspaceView({
   currentPage,
   pageData,
@@ -507,93 +526,170 @@ export function MeetingsWorkspaceView({
   showInfoSheet: boolean
 }) {
   const router = useRouter()
-  const stats = useMemo(() => {
-    const items = pageData.items
-    const completed = items.filter((item) => item.status === "completed").length
-    const processing = items.filter((item) => item.status === "processing").length
-    const failed = items.filter((item) => item.status === "failed").length
-    return { completed, processing, failed, total: pageData.total }
-  }, [pageData])
+  const meetingFileInputRef = useRef<HTMLInputElement | null>(null)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [meetingTitle, setMeetingTitle] = useState("")
+  const [meetingDescription, setMeetingDescription] = useState("")
+  const [meetingFile, setMeetingFile] = useState<File | null>(null)
+  const [createDropActive, setCreateDropActive] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
+  const [createPhase, setCreatePhase] = useState<"idle" | "uploading" | "done" | "error">("idle")
+  const [createMessage, setCreateMessage] = useState("")
+  const [createProgress, setCreateProgress] = useState(0)
+  const [isCreating, setIsCreating] = useState(false)
+
+  function resetCreateMeetingForm() {
+    setMeetingTitle("")
+    setMeetingDescription("")
+    setMeetingFile(null)
+    setCreateDropActive(false)
+    setCreateError(null)
+    setCreatePhase("idle")
+    setCreateMessage("")
+    setCreateProgress(0)
+    setIsCreating(false)
+  }
+
+  function selectMeetingFile(file: File | null) {
+    setCreateError(null)
+    setMeetingFile(file)
+    if (file && !meetingTitle.trim()) {
+      setMeetingTitle(meetingTitleFromFile(file))
+    }
+  }
+
+  function handleMeetingFileDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault()
+    setCreateDropActive(false)
+    selectMeetingFile(Array.from(event.dataTransfer.files ?? [])[0] ?? null)
+  }
+
+  async function uploadMeetingFile(meetingId: string, file: File) {
+    const init = await initMeetingUpload(meetingId, {
+      fileName: file.name,
+      fileSize: file.size,
+      mimeType: file.type || "application/octet-stream",
+    })
+
+    const partSize = init.partSize || DEFAULT_MEETING_PART_SIZE_BYTES
+    const totalParts = Math.max(1, Math.ceil(file.size / partSize))
+
+    try {
+      for (let partNumber = 1; partNumber <= totalParts; partNumber += 1) {
+        const start = (partNumber - 1) * partSize
+        const end = Math.min(file.size, partNumber * partSize)
+        const part = file.slice(start, end)
+        const signed = await signMeetingUploadPart(init.uploadId, partNumber)
+        setCreateMessage(`Загружается ${file.name}: часть ${partNumber}/${totalParts}`)
+        const response = await fetch(signed.signedUrl, {
+          method: signed.method || "PUT",
+          headers: signed.headers,
+          body: part,
+        })
+
+        if (!response.ok) {
+          throw new Error(`Не удалось загрузить часть ${partNumber}`)
+        }
+
+        setCreateProgress(Math.round((partNumber / totalParts) * 100))
+      }
+
+      await completeMeetingUpload(init.uploadId)
+    } catch (error) {
+      await abortMeetingUpload(init.uploadId).catch(() => undefined)
+      throw error
+    }
+  }
+
+  async function handleCreateMeeting() {
+    const trimmedTitle = meetingTitle.trim()
+    if (!trimmedTitle) {
+      setCreateError("Укажите название встречи.")
+      return
+    }
+
+    if (!meetingFile) {
+      setCreateError("Добавьте файл записи встречи.")
+      return
+    }
+
+    setIsCreating(true)
+    setCreateError(null)
+    setCreatePhase("uploading")
+    setCreateProgress(0)
+
+    try {
+      setCreateMessage("Создаём карточку встречи")
+      const created = await createMeeting({
+        title: trimmedTitle,
+        description: meetingDescription.trim(),
+      })
+
+      await uploadMeetingFile(created.id, meetingFile)
+      setCreateMessage("Запускаем обработку")
+      await startMeeting(created.id)
+      setCreatePhase("done")
+      setCreateMessage("Запись добавлена и отправлена в обработку")
+      setCreateOpen(false)
+      resetCreateMeetingForm()
+      router.push(`/meetings?page=1&meeting=${created.id}`)
+      router.refresh()
+    } catch (error) {
+      setCreatePhase("error")
+      setCreateError(
+        error instanceof Error ? error.message : "Не удалось добавить запись встречи"
+      )
+    } finally {
+      setIsCreating(false)
+    }
+  }
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(59,130,246,0.10),_transparent_32%),radial-gradient(circle_at_top_right,_rgba(16,185,129,0.10),_transparent_28%),linear-gradient(to_bottom,_var(--background),_var(--background))]">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-3 px-4 py-3 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between gap-3">
-          <Button variant="ghost" nativeButton={false} render={<Link href="/" />}>
-            <ArrowLeftIcon data-icon="inline-start" />
-            К интерфейсу LMS
-          </Button>
-        </div>
-
-        <section className="overflow-hidden rounded-3xl border bg-card/80 shadow-sm backdrop-blur">
-          <div className="flex flex-col gap-6 p-6 lg:flex-row lg:items-end lg:justify-between">
-            <div className="max-w-3xl">
-              <Badge variant="secondary" className="mb-3">
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" nativeButton={false} render={<Link href="/" />}>
+              <ArrowLeftIcon data-icon="inline-start" />
+              LMS
+            </Button>
+            <Separator orientation="vertical" className="h-5" />
+            <div className="flex items-center gap-2">
+              <Badge variant="secondary">
                 <WandSparklesIcon data-icon="inline-start" />
-                Модуль встреч
+                Встречи
               </Badge>
-              <h1 className="text-3xl font-semibold tracking-tight">
-                Встречи, транскрипты и ручная правка спикеров
-              </h1>
-              <p className="mt-3 max-w-2xl text-sm leading-7 text-muted-foreground">
-                Загруженные встречи, diarized transcript, единый markdown-результат и
-                история обработки в одном месте.
-              </p>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-2 lg:min-w-[420px]">
-              <Card size="sm">
-                <CardHeader className="pb-2">
-                  <CardDescription>Всего</CardDescription>
-                  <CardTitle>{stats.total}</CardTitle>
-                </CardHeader>
-              </Card>
-              <Card size="sm">
-                <CardHeader className="pb-2">
-                  <CardDescription>Готовы</CardDescription>
-                  <CardTitle>{stats.completed}</CardTitle>
-                </CardHeader>
-              </Card>
-              <Card size="sm">
-                <CardHeader className="pb-2">
-                  <CardDescription>В работе</CardDescription>
-                  <CardTitle>{stats.processing}</CardTitle>
-                </CardHeader>
-              </Card>
-              <Card size="sm">
-                <CardHeader className="pb-2">
-                  <CardDescription>Ошибки</CardDescription>
-                  <CardTitle>{stats.failed}</CardTitle>
-                </CardHeader>
-              </Card>
             </div>
           </div>
-        </section>
+        </div>
 
-        <section className="grid flex-1 gap-4 lg:grid-cols-[380px_minmax(0,1fr)]">
-          <Card className="flex min-h-[760px] flex-col overflow-hidden border-border/80 bg-card">
-            <CardHeader className="border-b bg-secondary/35">
+        <section className="grid flex-1 gap-3 lg:grid-cols-[340px_minmax(0,1fr)]">
+          <Card className="flex min-h-[700px] flex-col overflow-hidden border-border/80 bg-card">
+            <CardHeader className="border-b bg-secondary/35 px-4 py-3">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <CardTitle>Список встреч</CardTitle>
-                  <CardDescription>
-                    Выберите встречу слева, а справа откроются результаты обработки.
-                  </CardDescription>
                 </div>
-                <Badge variant="outline">{pageData.total}</Badge>
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline">{pageData.total}</Badge>
+                  <Button size="sm" onClick={() => setCreateOpen(true)}>
+                    <PlusIcon data-icon="inline-start" />
+                    Добавить
+                  </Button>
+                </div>
               </div>
             </CardHeader>
             <CardContent className="flex min-h-0 flex-1 flex-col p-0">
               <ScrollArea className="min-h-0 flex-1">
                 {pageData.items.length > 0 ? (
-                  <div className="space-y-3 p-3">
+                  <div className="flex flex-col gap-2 p-2">
                     {pageData.items.map((meeting) => {
                       const isSelected = meeting.id === selectedMeetingId
                       return (
                         <div
                           key={meeting.id}
                           className={cn(
-                            "rounded-2xl border p-4 transition-colors hover:bg-muted/35",
+                            "rounded-lg border px-3 py-2.5 transition-colors hover:bg-muted/35",
                             isSelected
                               ? "border-primary/40 bg-muted/40 shadow-sm"
                               : "border-border/70 bg-card"
@@ -602,13 +698,11 @@ export function MeetingsWorkspaceView({
                           <div className="flex items-start justify-between gap-3">
                             <Link
                               href={`/meetings?page=${currentPage}&meeting=${meeting.id}`}
-                              className="min-w-0 flex-1 space-y-2 text-left"
+                              className="min-w-0 flex-1 space-y-1 text-left"
                             >
-                              <div className="truncate text-base font-semibold">
-                                {meeting.title}
-                              </div>
-                              <div className="line-clamp-2 text-sm text-muted-foreground">
-                                {meeting.description || "Описание не заполнено"}
+                              <div className="truncate text-sm font-semibold">{meeting.title}</div>
+                              <div className="line-clamp-1 text-xs text-muted-foreground">
+                                {meeting.description || sourceFileLabel(meeting)}
                               </div>
                             </Link>
                             <div className="flex items-start gap-2">
@@ -616,7 +710,7 @@ export function MeetingsWorkspaceView({
                               <DropdownMenu>
                                 <DropdownMenuTrigger
                                   className={cn(
-                                    "inline-flex h-8 w-8 items-center justify-center rounded-md border border-border/70 bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                                    "inline-flex size-7 items-center justify-center rounded-md border border-border/70 bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                                   )}
                                   onClick={(event) => event.stopPropagation()}
                                 >
@@ -677,14 +771,16 @@ export function MeetingsWorkspaceView({
                               </DropdownMenu>
                             </div>
                           </div>
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            <Badge variant="outline">{meeting.speakersCount} спик.</Badge>
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
                             <Badge variant="outline">
                               {formatDuration(meeting.durationSeconds)}
                             </Badge>
-                          </div>
-                          <div className="mt-3 text-xs text-muted-foreground">
-                            {formatDateTime(meeting.updatedAt)}
+                            {meeting.speakersCount > 0 ? (
+                              <Badge variant="outline">{meeting.speakersCount} спик.</Badge>
+                            ) : null}
+                            <div className="text-xs text-muted-foreground">
+                              {formatDateTime(meeting.updatedAt)}
+                            </div>
                           </div>
                         </div>
                       )
@@ -701,8 +797,8 @@ export function MeetingsWorkspaceView({
                 )}
               </ScrollArea>
               <Separator />
-              <div className="flex items-center justify-between gap-3 px-4 py-3">
-                <div className="text-sm text-muted-foreground">
+              <div className="flex items-center justify-between gap-3 px-3 py-2.5">
+                <div className="text-xs text-muted-foreground">
                   Показаны {pageData.total === 0 ? 0 : (currentPage - 1) * pageData.limit + 1}-
                   {Math.min(currentPage * pageData.limit, pageData.total)} из {pageData.total}
                 </div>
@@ -735,20 +831,17 @@ export function MeetingsWorkspaceView({
             </CardContent>
           </Card>
 
-          <Card className="flex min-h-[760px] flex-col overflow-hidden border-border/80 bg-card">
-            <CardHeader className="border-b bg-secondary/20">
+          <Card className="flex min-h-[700px] flex-col overflow-hidden border-border/80 bg-card">
+            <CardHeader className="border-b bg-secondary/20 px-4 py-3">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <CardTitle>Результаты обработки</CardTitle>
-                  <CardDescription>
-                    Транскрипт, markdown и правка speaker labels для выбранной встречи.
-                  </CardDescription>
                 </div>
               </div>
             </CardHeader>
             <CardContent className="min-h-0 flex-1 p-0">
               {selectedMeeting ? (
-                <ScrollArea className="h-[760px]">
+                <ScrollArea className="h-[700px]">
                   <MeetingDetailView
                     meetingId={selectedMeeting.id}
                     initialMeeting={selectedMeeting}
@@ -756,20 +849,182 @@ export function MeetingsWorkspaceView({
                   />
                 </ScrollArea>
               ) : (
-                <div className="flex h-full min-h-[680px] items-center justify-center p-8 text-center">
-                <div className="max-w-md space-y-2">
-                  <h2 className="text-xl font-semibold">Выберите встречу</h2>
-                  <p className="text-sm text-muted-foreground">
-                    Слева доступен список встреч. После выбора здесь откроются транскрипт,
-                    markdown и история обработки.
-                  </p>
+                <div className="flex h-full min-h-[620px] items-center justify-center p-6 text-center">
+                  <div className="max-w-md space-y-2">
+                    <h2 className="text-lg font-semibold">Выберите встречу</h2>
+                    <p className="text-sm text-muted-foreground">
+                      Слева доступен список встреч. После выбора здесь откроется результат обработки.
+                    </p>
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
             </CardContent>
           </Card>
         </section>
       </div>
+      <Sheet
+        open={createOpen}
+        onOpenChange={(open) => {
+          if (!open && isCreating) {
+            return
+          }
+          setCreateOpen(open)
+          if (!open) {
+            resetCreateMeetingForm()
+          }
+        }}
+      >
+        <SheetContent className="w-full gap-0 sm:max-w-[680px]">
+          <SheetHeader className="border-b px-5 py-4">
+            <SheetTitle>Добавить запись встречи</SheetTitle>
+            <SheetDescription>
+              Укажите название и загрузите один файл встречи для расшифровки.
+            </SheetDescription>
+          </SheetHeader>
+          <ScrollArea className="flex-1">
+            <div className="flex flex-col gap-4 p-4">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="meeting-title">Название встречи</Label>
+                <Input
+                  id="meeting-title"
+                  value={meetingTitle}
+                  onChange={(event) => setMeetingTitle(event.target.value)}
+                  placeholder="Например: Статус по проекту за 18 апреля"
+                />
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="meeting-description">Комментарий</Label>
+                <Textarea
+                  id="meeting-description"
+                  value={meetingDescription}
+                  onChange={(event) => setMeetingDescription(event.target.value)}
+                  className="min-h-24"
+                  placeholder="Короткий контекст для этой записи."
+                />
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="meeting-file">Файл встречи</Label>
+                <div
+                  className={cn(
+                    "rounded-lg border border-dashed p-4 transition-colors",
+                    createDropActive
+                      ? "border-primary bg-secondary/70"
+                      : "border-border bg-background"
+                  )}
+                  onDragEnter={(event) => {
+                    event.preventDefault()
+                    setCreateDropActive(true)
+                  }}
+                  onDragOver={(event) => {
+                    event.preventDefault()
+                    setCreateDropActive(true)
+                  }}
+                  onDragLeave={(event) => {
+                    event.preventDefault()
+                    setCreateDropActive(false)
+                  }}
+                  onDrop={handleMeetingFileDrop}
+                >
+                  <div className="flex flex-col items-center gap-2 py-3 text-center">
+                    <div className="rounded-full bg-secondary p-3">
+                      <UploadIcon className="text-primary" />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <p className="text-sm font-medium">
+                        Перетащите запись сюда или выберите файл вручную
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Поддерживаются аудио и видеофайлы. Для встречи используется только один файл.
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => meetingFileInputRef.current?.click()}
+                    >
+                      Выбрать файл
+                    </Button>
+                  </div>
+                </div>
+                <Input
+                  ref={meetingFileInputRef}
+                  id="meeting-file"
+                  type="file"
+                  accept={MEETING_FILE_ACCEPT}
+                  className="sr-only"
+                  onChange={(event) => {
+                    selectMeetingFile(Array.from(event.target.files ?? [])[0] ?? null)
+                    event.currentTarget.value = ""
+                  }}
+                />
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {meetingFile ? (
+                  <Badge variant="secondary" className="gap-1.5 pr-1">
+                    <span className="max-w-[360px] truncate">{meetingFile.name}</span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      className="h-4 w-4 hover:bg-background/60"
+                      onClick={() => selectMeetingFile(null)}
+                      aria-label={`Удалить файл ${meetingFile.name}`}
+                    >
+                      <XIcon className="size-3" />
+                    </Button>
+                  </Badge>
+                ) : (
+                  <Badge variant="outline">Файл не выбран</Badge>
+                )}
+              </div>
+
+              {createError ? (
+                <Alert variant="destructive">
+                  <XCircleIcon />
+                  <AlertTitle>Не удалось добавить запись</AlertTitle>
+                  <AlertDescription>{createError}</AlertDescription>
+                </Alert>
+              ) : null}
+
+              {createPhase !== "idle" ? (
+                <div className="flex flex-col gap-2">
+                  <Progress value={createProgress} className="flex-col gap-2">
+                    <ProgressLabel>Загрузка и запуск обработки</ProgressLabel>
+                    <ProgressValue>
+                      {(formattedValue, value) => `${formattedValue ?? value ?? 0}%`}
+                    </ProgressValue>
+                  </Progress>
+                  <div className="text-xs text-muted-foreground">{createMessage}</div>
+                </div>
+              ) : null}
+            </div>
+          </ScrollArea>
+          <SheetFooter className="border-t px-5 py-4">
+            <Button
+              variant="outline"
+              onClick={() => setCreateOpen(false)}
+              disabled={isCreating}
+            >
+              Отмена
+            </Button>
+            <Button
+              onClick={() => void handleCreateMeeting()}
+              disabled={!meetingTitle.trim() || !meetingFile || isCreating}
+            >
+              {isCreating ? (
+                <Loader2Icon data-icon="inline-start" className="animate-spin" />
+              ) : (
+                <PlusIcon data-icon="inline-start" />
+              )}
+              {isCreating ? "Добавляем запись..." : "Добавить запись"}
+            </Button>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
       <MeetingInfoSheet
         meeting={selectedMeeting}
         open={showInfoSheet && Boolean(selectedMeeting)}
@@ -896,30 +1151,22 @@ export function MeetingDetailView({
       <div
         className={
           embedded
-            ? "flex min-h-0 flex-col gap-4 p-4"
-            : "mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8"
+            ? "flex min-h-0 flex-col gap-3 p-3"
+            : "mx-auto flex w-full max-w-7xl flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8"
         }
       >
         <div className="flex flex-wrap items-center justify-between gap-3">
           {embedded ? null : (
-            <Button variant="ghost" nativeButton={false} render={<Link href="/meetings" />}>
+            <Button variant="ghost" size="sm" nativeButton={false} render={<Link href="/meetings" />}>
               <ArrowLeftIcon data-icon="inline-start" />
               К списку
             </Button>
           )}
 
           <div className="flex flex-wrap gap-2">
-            <Button variant="outline" onClick={handleRefresh}>
+            <Button size="sm" variant="outline" onClick={handleRefresh}>
               <RefreshCwIcon data-icon="inline-start" />
               Обновить
-            </Button>
-            <Button variant="outline" onClick={handleCopyMarkdown}>
-              <CopyIcon data-icon="inline-start" />
-              {copied ? "Скопировано" : "Копировать markdown"}
-            </Button>
-            <Button onClick={handleDownloadMarkdown}>
-              <DownloadIcon data-icon="inline-start" />
-              Скачать markdown
             </Button>
           </div>
         </div>
@@ -932,7 +1179,7 @@ export function MeetingDetailView({
           </Alert>
         ) : null}
 
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-col gap-4">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-col gap-3">
           <TabsList className="w-full justify-start overflow-x-auto">
             <TabsTrigger value="markdown">
               <SparklesIcon data-icon="inline-start" />
@@ -948,15 +1195,12 @@ export function MeetingDetailView({
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="markdown" className="space-y-4">
+          <TabsContent value="markdown" className="space-y-3">
             <Card>
-              <CardHeader className="border-b">
+              <CardHeader className="border-b px-4 py-3">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <CardTitle>Человекочитаемый markdown</CardTitle>
-                    <CardDescription>
-                      На этой вкладке собраны саммари, протокол и поручения без технических деталей.
-                    </CardDescription>
                   </div>
                   <div className="inline-flex rounded-lg border bg-muted/30 p-1">
                     <Button
@@ -980,19 +1224,19 @@ export function MeetingDetailView({
                   </div>
                 </div>
               </CardHeader>
-              <CardContent className="flex flex-col gap-4 p-4">
+              <CardContent className="flex flex-col gap-3 p-3">
                 <div className="flex flex-wrap gap-2">
-                  <Button variant="outline" onClick={handleCopyMarkdown}>
+                  <Button size="sm" variant="outline" onClick={handleCopyMarkdown}>
                     <CopyIcon data-icon="inline-start" />
                     {copied ? "Скопировано" : "Копировать"}
                   </Button>
-                  <Button onClick={handleDownloadMarkdown}>
+                  <Button size="sm" onClick={handleDownloadMarkdown}>
                     <DownloadIcon data-icon="inline-start" />
                     Скачать .md
                   </Button>
                 </div>
                 {markdownMode === "preview" ? (
-                  <ScrollArea className="h-[620px] rounded-xl border bg-background p-4">
+                  <ScrollArea className="h-[560px] rounded-lg border bg-background p-4">
                     <div className="max-w-none">
                       <ReactMarkdown
                         remarkPlugins={[remarkGfm]}
@@ -1006,16 +1250,16 @@ export function MeetingDetailView({
                   <Textarea
                     value={markdownDraft}
                     onChange={(event) => setMarkdownDraft(event.target.value)}
-                    className="min-h-[620px] font-mono text-xs leading-6"
+                    className="min-h-[560px] font-mono text-xs leading-6"
                   />
                 )}
               </CardContent>
             </Card>
           </TabsContent>
 
-          <TabsContent value="transcript" className="space-y-4">
+          <TabsContent value="transcript" className="space-y-3">
             <Card>
-              <CardHeader className="border-b">
+              <CardHeader className="border-b px-4 py-3">
                 <CardTitle>Diarized transcript</CardTitle>
                 <CardDescription>
                   Только диаризованный текст, который можно читать и править через
@@ -1023,13 +1267,13 @@ export function MeetingDetailView({
                 </CardDescription>
               </CardHeader>
               <CardContent className="p-0">
-                <ScrollArea className="h-[680px]">
-                  <div className="flex flex-col gap-3 p-4">
+                <ScrollArea className="h-[620px]">
+                  <div className="flex flex-col gap-2 p-3">
                     {meeting.segments.length > 0 ? (
                       meeting.segments.map((segment) => (
                         <div
                           key={segment.id}
-                          className="rounded-2xl border bg-card p-4 shadow-sm"
+                          className="rounded-lg border bg-card px-3 py-2.5"
                         >
                           <div className="flex flex-wrap items-center gap-2">
                             <Badge variant="outline">
@@ -1039,13 +1283,8 @@ export function MeetingDetailView({
                               {Math.floor(segment.startMs / 1000)}s -{" "}
                               {Math.floor(segment.endMs / 1000)}s
                             </Badge>
-                            {segment.confidence != null ? (
-                              <Badge variant="outline">
-                                confidence {segment.confidence.toFixed(2)}
-                              </Badge>
-                            ) : null}
                           </div>
-                          <p className="mt-3 whitespace-pre-wrap leading-7">
+                          <p className="mt-2 whitespace-pre-wrap text-sm leading-6">
                             {segment.text || "—"}
                           </p>
                         </div>
@@ -1063,9 +1302,9 @@ export function MeetingDetailView({
             </Card>
           </TabsContent>
 
-          <TabsContent value="speakers" className="space-y-4">
+          <TabsContent value="speakers" className="space-y-3">
             <Card>
-              <CardHeader className="border-b">
+              <CardHeader className="border-b px-4 py-3">
                 <CardTitle>Ручная правка speaker labels</CardTitle>
                 <CardDescription>
                   Можно переименовать любой label в понятное пользователю имя.
