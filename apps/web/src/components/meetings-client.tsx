@@ -11,7 +11,6 @@ import {
   PlusIcon,
   Loader2Icon,
   InfoIcon,
-  RefreshCwIcon,
   SaveIcon,
   SparklesIcon,
   SquarePenIcon,
@@ -1136,10 +1135,6 @@ export function MeetingDetailView({
     downloadText(`${meeting.title}.md`, markdownDraft)
   }
 
-  const handleRefresh = () => {
-    window.location.reload()
-  }
-
   return (
     <div
       className={
@@ -1155,21 +1150,14 @@ export function MeetingDetailView({
             : "mx-auto flex w-full max-w-7xl flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8"
         }
       >
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          {embedded ? null : (
+        {embedded ? null : (
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <Button variant="ghost" size="sm" nativeButton={false} render={<Link href="/meetings" />}>
               <ArrowLeftIcon data-icon="inline-start" />
               К списку
             </Button>
-          )}
-
-          <div className="flex flex-wrap gap-2">
-            <Button size="sm" variant="outline" onClick={handleRefresh}>
-              <RefreshCwIcon data-icon="inline-start" />
-              Обновить
-            </Button>
           </div>
-        </div>
+        )}
 
         {error ? (
           <Alert variant="destructive">
@@ -1198,43 +1186,40 @@ export function MeetingDetailView({
           <TabsContent value="markdown" className="space-y-3">
             <Card>
               <CardHeader className="border-b px-4 py-3">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <CardTitle>Человекочитаемый markdown</CardTitle>
-                  </div>
-                  <div className="inline-flex rounded-lg border bg-muted/30 p-1">
-                    <Button
-                      type="button"
-                      variant={markdownMode === "preview" ? "secondary" : "ghost"}
-                      size="sm"
-                      onClick={() => setMarkdownMode("preview")}
-                      className="rounded-md"
-                    >
-                      Предпросмотр
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="inline-flex rounded-lg border bg-muted/30 p-1">
+                      <Button
+                        type="button"
+                        variant={markdownMode === "preview" ? "secondary" : "ghost"}
+                        size="sm"
+                        onClick={() => setMarkdownMode("preview")}
+                        className="rounded-md"
+                      >
+                        Предпросмотр
+                      </Button>
+                      <Button
+                        type="button"
+                        variant={markdownMode === "edit" ? "secondary" : "ghost"}
+                        size="sm"
+                        onClick={() => setMarkdownMode("edit")}
+                        className="rounded-md"
+                      >
+                        Редактирование
+                      </Button>
+                    </div>
+                    <Button size="sm" variant="outline" onClick={handleCopyMarkdown}>
+                      <CopyIcon data-icon="inline-start" />
+                      {copied ? "Скопировано" : "Копировать"}
                     </Button>
-                    <Button
-                      type="button"
-                      variant={markdownMode === "edit" ? "secondary" : "ghost"}
-                      size="sm"
-                      onClick={() => setMarkdownMode("edit")}
-                      className="rounded-md"
-                    >
-                      Редактирование
+                    <Button size="sm" onClick={handleDownloadMarkdown}>
+                      <DownloadIcon data-icon="inline-start" />
+                      Скачать .md
                     </Button>
                   </div>
                 </div>
               </CardHeader>
               <CardContent className="flex flex-col gap-3 p-3">
-                <div className="flex flex-wrap gap-2">
-                  <Button size="sm" variant="outline" onClick={handleCopyMarkdown}>
-                    <CopyIcon data-icon="inline-start" />
-                    {copied ? "Скопировано" : "Копировать"}
-                  </Button>
-                  <Button size="sm" onClick={handleDownloadMarkdown}>
-                    <DownloadIcon data-icon="inline-start" />
-                    Скачать .md
-                  </Button>
-                </div>
                 {markdownMode === "preview" ? (
                   <ScrollArea className="h-[560px] rounded-lg border bg-background p-4">
                     <div className="max-w-none">
