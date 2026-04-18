@@ -10,6 +10,7 @@ import {
   FileTextIcon,
   PencilIcon,
   Loader2Icon,
+  MicIcon,
   MoreHorizontalIcon,
   PlusIcon,
   ServerCogIcon,
@@ -316,8 +317,11 @@ function serviceKindIcon(serviceKey: string) {
   if (serviceKey === "redis") {
     return <ServerCogIcon className="size-4 text-muted-foreground" />
   }
-  if (serviceKey === "openai") {
+  if (serviceKey === "llm") {
     return <SparklesIcon className="size-4 text-muted-foreground" />
+  }
+  if (serviceKey === "salutespeech") {
+    return <MicIcon className="size-4 text-muted-foreground" />
   }
   if (serviceKey === "worker") {
     return <ActivityIcon className="size-4 text-muted-foreground" />
@@ -1039,7 +1043,12 @@ export function EcolmsDashboard() {
     { key: "api", title: "API", state: systemHealth?.services.api ?? null },
     { key: "postgres", title: "Postgres", state: systemHealth?.services.postgres ?? null },
     { key: "redis", title: "Redis", state: systemHealth?.services.redis ?? null },
-    { key: "openai", title: "OpenAI", state: systemHealth?.services.openai ?? null },
+    { key: "llm", title: "LLM", state: systemHealth?.services.llm ?? null },
+    {
+      key: "salutespeech",
+      title: "SaluteSpeech",
+      state: systemHealth?.services.salutespeech ?? null,
+    },
     { key: "worker", title: "Worker", state: systemHealth?.services.worker ?? null },
     {
       key: "transcriptionService",

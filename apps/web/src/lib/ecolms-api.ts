@@ -204,7 +204,8 @@ export interface SystemHealthRecord {
     api: ServiceHealthState
     postgres: ServiceHealthState
     redis: ServiceHealthState
-    openai: ServiceHealthState
+    llm: ServiceHealthState
+    salutespeech: ServiceHealthState
     worker: ServiceHealthState
     transcriptionService: ServiceHealthState
   }

@@ -4,14 +4,20 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { type DragEvent, useEffect, useMemo, useRef, useState } from "react"
 import {
+  ActivityIcon,
+  AlertCircleIcon,
   ArrowLeftIcon,
+  CheckCircle2Icon,
   CopyIcon,
+  DatabaseIcon,
   DownloadIcon,
   FileTextIcon,
+  MicIcon,
   PlusIcon,
   Loader2Icon,
   InfoIcon,
   SaveIcon,
+  ServerCogIcon,
   SparklesIcon,
   SquarePenIcon,
   MoreHorizontalIcon,
@@ -67,6 +73,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@/components/ui/hover-card"
+import {
   meetingStageLabels,
   type MeetingArtifactRecord,
   type MeetingDetailRecord,
@@ -76,10 +87,14 @@ import {
   type MeetingStageId,
   type MeetingStatus,
   type PaginatedMeetings,
+  type ServiceHealthState,
+  type ServiceHealthStatus,
+  type SystemHealthRecord,
   abortMeetingUpload,
   completeMeetingUpload,
   createMeeting,
   deleteMeeting,
+  getSystemHealth,
   initMeetingUpload,
   signMeetingUploadPart,
   startMeeting,
@@ -507,8 +522,78 @@ const MEETING_FILE_ACCEPT =
   "audio/*,video/*,.webm,.mp4,.mov,.m4a,.mp3,.wav,.ogg,.opus"
 const DEFAULT_MEETING_PART_SIZE_BYTES = 5 * 1024 * 1024
 
+type UiAlertType = "success" | "error" | "info"
+
+type UiAlert = {
+  id: string
+  type: UiAlertType
+  title: string
+  description?: string
+}
+
 function meetingTitleFromFile(file: File) {
   return file.name.replace(/\.[^.]+$/, "").trim()
+}
+
+function serviceStatusLabel(status: ServiceHealthStatus) {
+  switch (status) {
+    case "up":
+      return "Доступен"
+    case "down":
+      return "Недоступен"
+    case "degraded":
+      return "Проблемы"
+    default:
+      return "Неизвестно"
+  }
+}
+
+function serviceStatusBadgeClass(status: ServiceHealthStatus) {
+  switch (status) {
+    case "up":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700"
+    case "down":
+      return "border-red-200 bg-red-50 text-red-700"
+    case "degraded":
+      return "border-amber-200 bg-amber-50 text-amber-700"
+    default:
+      return "border-border bg-muted text-muted-foreground"
+  }
+}
+
+function serviceStatusIcon(status: ServiceHealthStatus) {
+  switch (status) {
+    case "up":
+      return <CheckCircle2Icon className="size-4 text-emerald-600" />
+    case "down":
+      return <XCircleIcon className="size-4 text-red-600" />
+    case "degraded":
+      return <AlertCircleIcon className="size-4 text-amber-600" />
+    default:
+      return <ActivityIcon className="size-4 text-muted-foreground" />
+  }
+}
+
+function serviceKindIcon(serviceKey: string) {
+  if (serviceKey === "postgres") {
+    return <DatabaseIcon className="size-4 text-muted-foreground" />
+  }
+  if (serviceKey === "redis") {
+    return <ServerCogIcon className="size-4 text-muted-foreground" />
+  }
+  if (serviceKey === "llm") {
+    return <SparklesIcon className="size-4 text-muted-foreground" />
+  }
+  if (serviceKey === "salutespeech") {
+    return <MicIcon className="size-4 text-muted-foreground" />
+  }
+  if (serviceKey === "worker") {
+    return <ActivityIcon className="size-4 text-muted-foreground" />
+  }
+  if (serviceKey === "transcriptionService") {
+    return <ServerCogIcon className="size-4 text-muted-foreground" />
+  }
+  return <ActivityIcon className="size-4 text-muted-foreground" />
 }
 
 export function MeetingsWorkspaceView({
@@ -526,6 +611,8 @@ export function MeetingsWorkspaceView({
 }) {
   const router = useRouter()
   const meetingFileInputRef = useRef<HTMLInputElement | null>(null)
+  const [alerts, setAlerts] = useState<UiAlert[]>([])
+  const [systemHealth, setSystemHealth] = useState<SystemHealthRecord | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [meetingTitle, setMeetingTitle] = useState("")
   const [meetingDescription, setMeetingDescription] = useState("")
@@ -536,6 +623,103 @@ export function MeetingsWorkspaceView({
   const [createMessage, setCreateMessage] = useState("")
   const [createProgress, setCreateProgress] = useState(0)
   const [isCreating, setIsCreating] = useState(false)
+
+  function dismissAlert(id: string) {
+    setAlerts((current) => current.filter((item) => item.id !== id))
+  }
+
+  function notify(type: UiAlertType, title: string, description?: string) {
+    const id = crypto.randomUUID()
+    setAlerts((current) => [...current, { id, type, title, description }])
+    window.setTimeout(() => {
+      dismissAlert(id)
+    }, 5000)
+  }
+
+  async function refreshHealth() {
+    try {
+      const health = await getSystemHealth()
+      setSystemHealth(health)
+      return health
+    } catch {
+      setSystemHealth(null)
+      return null
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadHealth = async () => {
+      try {
+        const health = await getSystemHealth()
+        if (!cancelled) {
+          setSystemHealth(health)
+        }
+      } catch {
+        if (!cancelled) {
+          setSystemHealth(null)
+        }
+      }
+    }
+
+    void loadHealth()
+    const intervalId = window.setInterval(() => {
+      void loadHealth()
+    }, 15_000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(intervalId)
+    }
+  }, [])
+
+  const overallHealthStatus: ServiceHealthStatus = systemHealth?.status ?? "unknown"
+  const serviceEntries: Array<{
+    key: keyof SystemHealthRecord["services"]
+    title: string
+    state: ServiceHealthState | null
+  }> = [
+    { key: "api", title: "API", state: systemHealth?.services.api ?? null },
+    { key: "postgres", title: "Postgres", state: systemHealth?.services.postgres ?? null },
+    { key: "redis", title: "Redis", state: systemHealth?.services.redis ?? null },
+    { key: "llm", title: "LLM", state: systemHealth?.services.llm ?? null },
+    {
+      key: "salutespeech",
+      title: "SaluteSpeech",
+      state: systemHealth?.services.salutespeech ?? null,
+    },
+    { key: "worker", title: "Worker", state: systemHealth?.services.worker ?? null },
+    {
+      key: "transcriptionService",
+      title: "Transcription Service",
+      state: systemHealth?.services.transcriptionService ?? null,
+    },
+  ]
+
+  function getMeetingHealthBlockers(health: SystemHealthRecord | null) {
+    if (!health) {
+      return ["Не удалось проверить доступность сервисов."]
+    }
+
+    const blockers: string[] = []
+    const requiredServices: Array<{ name: string; state: ServiceHealthState }> = [
+      { name: "API", state: health.services.api },
+      { name: "Postgres", state: health.services.postgres },
+      { name: "Redis", state: health.services.redis },
+      { name: "Worker", state: health.services.worker },
+      { name: "LLM", state: health.services.llm },
+      { name: "SaluteSpeech", state: health.services.salutespeech },
+    ]
+
+    for (const service of requiredServices) {
+      if (service.state.status !== "up") {
+        blockers.push(`${service.name}: ${service.state.details}`)
+      }
+    }
+
+    return blockers
+  }
 
   function resetCreateMeetingForm() {
     setMeetingTitle("")
@@ -618,6 +802,16 @@ export function MeetingsWorkspaceView({
     setCreateProgress(0)
 
     try {
+      const health = await refreshHealth()
+      const blockers = getMeetingHealthBlockers(health)
+      if (blockers.length > 0) {
+        const message = blockers.join(" ")
+        setCreatePhase("error")
+        setCreateError(message)
+        notify("error", "Обработка недоступна", message)
+        return
+      }
+
       setCreateMessage("Создаём карточку встречи")
       const created = await createMeeting({
         title: trimmedTitle,
@@ -629,15 +823,17 @@ export function MeetingsWorkspaceView({
       await startMeeting(created.id)
       setCreatePhase("done")
       setCreateMessage("Запись добавлена и отправлена в обработку")
+      notify("success", "Запись добавлена", "Встреча создана и отправлена в обработку.")
       setCreateOpen(false)
       resetCreateMeetingForm()
       router.push(`/meetings?page=1&meeting=${created.id}`)
       router.refresh()
     } catch (error) {
-      setCreatePhase("error")
-      setCreateError(
+      const message =
         error instanceof Error ? error.message : "Не удалось добавить запись встречи"
-      )
+      setCreatePhase("error")
+      setCreateError(message)
+      notify("error", "Ошибка обработки встречи", message)
     } finally {
       setIsCreating(false)
     }
@@ -660,6 +856,58 @@ export function MeetingsWorkspaceView({
               </Badge>
             </div>
           </div>
+          <HoverCard>
+            <HoverCardTrigger
+              render={
+                <button
+                  type="button"
+                  className={cn(
+                    "inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm",
+                    serviceStatusBadgeClass(overallHealthStatus)
+                  )}
+                />
+              }
+            >
+              {serviceStatusIcon(overallHealthStatus)}
+              <span>Сервисы: {serviceStatusLabel(overallHealthStatus)}</span>
+            </HoverCardTrigger>
+            <HoverCardContent align="end" side="bottom" className="min-w-80 max-w-96 space-y-3">
+              <div className="space-y-1">
+                <div className="text-sm font-semibold">Доступность сервисов</div>
+                <div className="text-xs text-muted-foreground">
+                  Обновлено: {systemHealth ? formatDateTime(systemHealth.timestamp) : "нет данных"}
+                </div>
+              </div>
+              <div className="space-y-2">
+                {serviceEntries.map((entry) => {
+                  const state = entry.state
+                  const status = state?.status ?? "unknown"
+                  return (
+                    <div
+                      key={entry.key}
+                      className="flex items-start justify-between gap-3 rounded-md border border-border/70 bg-card px-3 py-2"
+                    >
+                      <div className="min-w-0 space-y-1">
+                        <div className="flex items-center gap-2">
+                          {serviceKindIcon(entry.key)}
+                          <span className="text-sm font-medium">{entry.title}</span>
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {state?.details ?? "Нет данных"}
+                        </div>
+                      </div>
+                      <Badge
+                        variant="outline"
+                        className={cn("shrink-0", serviceStatusBadgeClass(status))}
+                      >
+                        {serviceStatusLabel(status)}
+                      </Badge>
+                    </div>
+                  )
+                })}
+              </div>
+            </HoverCardContent>
+          </HoverCard>
         </div>
 
         <section className="grid flex-1 gap-3 lg:grid-cols-[340px_minmax(0,1fr)]">
@@ -1042,6 +1290,31 @@ export function MeetingsWorkspaceView({
           router.refresh()
         }}
       />
+      <div className="pointer-events-none fixed bottom-4 right-4 z-[70] flex w-[min(92vw,420px)] flex-col items-end gap-2">
+        {alerts.map((item) => (
+          <Alert
+            key={item.id}
+            variant={item.type === "error" ? "destructive" : "default"}
+            className={cn(
+              "pointer-events-auto relative w-full pr-10 shadow-lg",
+              item.type === "success" ? "border-emerald-300 bg-emerald-50 text-emerald-900" : ""
+            )}
+          >
+            <AlertTitle>{item.title}</AlertTitle>
+            {item.description ? <AlertDescription>{item.description}</AlertDescription> : null}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              className="absolute right-2 top-2"
+              onClick={() => dismissAlert(item.id)}
+              aria-label="Закрыть уведомление"
+            >
+              <XIcon className="size-3.5" />
+            </Button>
+          </Alert>
+        ))}
+      </div>
     </div>
   )
 }

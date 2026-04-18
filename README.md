@@ -53,6 +53,8 @@ Browser
 - один экран-дашборд для списка проектов и карточки проекта;
 - отдельный экран `/meetings` в двухпанельной компоновке: список встреч слева, результаты обработки справа;
 - добавление новой записи встречи прямо из `/meetings`: создать карточку, загрузить один файл и сразу запустить обработку;
+- в `meetings` и LMS используется единый паттерн уведомлений: компактные toast-like alerts в правом нижнем углу;
+- экран `meetings` показывает доступность `LLM`, `SaluteSpeech`, баз данных и фоновых модулей через health badge, как в LMS;
 - в левом списке встреч есть меню `...` с действиями `Информация` и `Удалить`;
 - в хедере экрана `/meetings` есть кнопка возврата к основному интерфейсу LMS;
 - по пункту `Информация` открывается `Sheet` с техническими деталями, `jobs` и артефактами;
@@ -68,6 +70,7 @@ Browser
 
 - глобальный префикс маршрутов: `/api`;
 - контроллеры: `projects`, `uploads`, `jobs`, `artifacts`, `health`;
+- health-check агрегирует статус `api`, `postgres`, `redis`, `llm`, `salutespeech`, `worker`, `transcription-service`;
 - хранение и миграция минимальной схемы БД выполняются прямо из `PostgresService`;
 - очередь реализована через Redis list, без BullMQ;
 - presigned URL для S3 формируются собственным кодом, без AWS SDK.
@@ -79,7 +82,8 @@ Browser
 - извлечение текста из `pdf`, `docx`, `pptx`, `rtf`, `txt`;
 - вызов transcription-service для аудио/видео;
 - генерация `source_compiled`, `course_outline`, `course_content`, `course_test`;
-- вызов OpenAI/OpenRouter по HTTP с fallback между провайдерами.
+- вызов только одного выбранного LLM-провайдера (`OpenAI` или `OpenRouter`) по `LLM_PRIMARY_PROVIDER`.
+- ошибки `quota / balance / payment required` от LLM и `SaluteSpeech` нормализуются в человекочитаемый текст для UI и job logs.
 
 ### `apps/transcription-service`
 

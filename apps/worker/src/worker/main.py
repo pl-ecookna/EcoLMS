@@ -395,6 +395,48 @@ def parse_json_from_text(value: str) -> dict[str, Any]:
     return parsed
 
 
+def resolve_llm_provider(config: WorkerConfig) -> str:
+    primary = config.llm_primary_provider
+    if primary not in ("openai", "openrouter"):
+        primary = "openai"
+
+    if primary == "openai" and not config.openai_api_key.strip():
+        raise RuntimeError("Выбран LLM-провайдер openai, но OPENAI_API_KEY не задан.")
+    if primary == "openrouter" and not config.openrouter_api_key.strip():
+        raise RuntimeError(
+            "Выбран LLM-провайдер openrouter, но OPENROUTER_API_KEY не задан."
+        )
+
+    return primary
+
+
+def normalize_provider_error(provider: str, raw_error: str) -> str:
+    normalized = raw_error.lower()
+    billing_patterns = [
+        "insufficient_quota",
+        "insufficient quota",
+        "insufficient funds",
+        "out of credits",
+        "payment required",
+        "billing",
+        "quota exceeded",
+        "not enough credits",
+        "credit balance",
+        "недостаточно средств",
+        "недостаточно денег",
+        "недостаточно кредитов",
+        "исчерпан лимит",
+        "квота",
+        '"status":402',
+        "http 402",
+    ]
+    if any(pattern in normalized for pattern in billing_patterns):
+        if provider == "salutespeech":
+            return "SaluteSpeech недоступен: недостаточно средств или исчерпана квота."
+        return f"{provider} недоступен: недостаточно средств или исчерпана квота."
+    return raw_error
+
+
 def parse_json(value: Any, fallback: dict[str, Any]) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
@@ -429,12 +471,23 @@ def openai_chat_completion(
             "Content-Type": "application/json; charset=utf-8",
         },
     )
-    with urlrequest.urlopen(
-        req,
-        timeout=timeout_seconds,
-        context=llm_ssl_context(),
-    ) as response:
-        body = json.loads(response.read().decode("utf-8"))
+    try:
+        with urlrequest.urlopen(
+            req,
+            timeout=timeout_seconds,
+            context=llm_ssl_context(),
+        ) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except urlerror.HTTPError as exc:
+        try:
+            details = exc.read().decode("utf-8", errors="ignore").strip()
+        except Exception:
+            details = ""
+        message = normalize_provider_error(
+            "OpenAI",
+            f"HTTP {exc.code}{f': {details}' if details else ''}",
+        )
+        raise RuntimeError(message) from exc
     content = (
         body.get("choices", [{}])[0]
         .get("message", {})
@@ -470,12 +523,23 @@ def openrouter_chat_completion(
             "X-Title": "EcoLMS Worker",
         },
     )
-    with urlrequest.urlopen(
-        req,
-        timeout=timeout_seconds,
-        context=llm_ssl_context(),
-    ) as response:
-        body = json.loads(response.read().decode("utf-8"))
+    try:
+        with urlrequest.urlopen(
+            req,
+            timeout=timeout_seconds,
+            context=llm_ssl_context(),
+        ) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except urlerror.HTTPError as exc:
+        try:
+            details = exc.read().decode("utf-8", errors="ignore").strip()
+        except Exception:
+            details = ""
+        message = normalize_provider_error(
+            "OpenRouter",
+            f"HTTP {exc.code}{f': {details}' if details else ''}",
+        )
+        raise RuntimeError(message) from exc
     content = (
         body.get("choices", [{}])[0]
         .get("message", {})
@@ -513,65 +577,45 @@ def analyze_source_with_llm(
         {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
     ]
 
-    available_providers: list[str] = []
-    if config.openai_api_key.strip():
-        available_providers.append("openai")
-    if config.openrouter_api_key.strip():
-        available_providers.append("openrouter")
-    if not available_providers:
-        raise RuntimeError("OPENAI_API_KEY или OPENROUTER_API_KEY не заданы.")
+    provider = resolve_llm_provider(config)
+    try:
+        if provider == "openai":
+            content, model_name = openai_chat_completion(
+                config.openai_api_key,
+                config.openai_model,
+                messages,
+                config.llm_timeout_seconds,
+            )
+        else:
+            content, model_name = openrouter_chat_completion(
+                config.openrouter_api_key,
+                config.openrouter_base_url,
+                config.openrouter_model,
+                messages,
+                config.llm_timeout_seconds,
+            )
 
-    primary = config.llm_primary_provider
-    if primary not in ("openai", "openrouter"):
-        primary = "openai"
-    ordered = [primary, "openrouter" if primary == "openai" else "openai"]
-    ordered = [provider for provider in ordered if provider in available_providers]
-
-    attempts: list[dict[str, Any]] = []
-    for provider in ordered:
-        try:
-            if provider == "openai":
-                content, model_name = openai_chat_completion(
-                    config.openai_api_key,
-                    config.openai_model,
-                    messages,
-                    config.llm_timeout_seconds,
-                )
-            else:
-                content, model_name = openrouter_chat_completion(
-                    config.openrouter_api_key,
-                    config.openrouter_base_url,
-                    config.openrouter_model,
-                    messages,
-                    config.llm_timeout_seconds,
-                )
-
-            parsed = parse_json_from_text(content)
-            summary = str(parsed.get("summary") or "").strip()
-            transcript = str(
-                parsed.get("transcript")
-                or parsed.get("sourceText")
-                or parsed.get("text")
-                or ""
-            ).strip()
-            if not summary:
-                summary = extract_summary(source_text)
-            if not transcript:
-                transcript = source_text
-            return {
-                "summary": summary,
-                "transcript": transcript,
-                "provider": provider,
-                "model": model_name,
-                "attempts": attempts + [{"provider": provider, "ok": True}],
-            }
-        except Exception as exc:
-            attempts.append({"provider": provider, "ok": False, "error": str(exc)})
-
-    details = "; ".join(
-        f"{item['provider']}: {item['error']}" for item in attempts if not item["ok"]
-    )
-    raise RuntimeError(f"Все LLM-провайдеры завершились ошибкой: {details}")
+        parsed = parse_json_from_text(content)
+        summary = str(parsed.get("summary") or "").strip()
+        transcript = str(
+            parsed.get("transcript")
+            or parsed.get("sourceText")
+            or parsed.get("text")
+            or ""
+        ).strip()
+        if not summary:
+            summary = extract_summary(source_text)
+        if not transcript:
+            transcript = source_text
+        return {
+            "summary": summary,
+            "transcript": transcript,
+            "provider": provider,
+            "model": model_name,
+            "attempts": [{"provider": provider, "ok": True}],
+        }
+    except Exception as exc:
+        raise RuntimeError(f"LLM-провайдер {provider} завершился ошибкой: {exc}") from exc
 
 
 def stage_input_stages(stage: str) -> list[str]:
@@ -632,61 +676,41 @@ def generate_stage_markdown_with_llm(
         {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
     ]
 
-    available_providers: list[str] = []
-    if config.openai_api_key.strip():
-        available_providers.append("openai")
-    if config.openrouter_api_key.strip():
-        available_providers.append("openrouter")
-    if not available_providers:
-        raise RuntimeError("OPENAI_API_KEY или OPENROUTER_API_KEY не заданы.")
-
-    primary = config.llm_primary_provider
-    if primary not in ("openai", "openrouter"):
-        primary = "openai"
-    ordered = [primary, "openrouter" if primary == "openai" else "openai"]
-    ordered = [provider for provider in ordered if provider in available_providers]
-
-    attempts: list[dict[str, Any]] = []
-    for provider in ordered:
-        try:
-            if provider == "openai":
-                content, model_name = openai_chat_completion(
-                    config.openai_api_key,
-                    config.openai_model,
-                    messages,
-                    config.llm_timeout_seconds,
-                )
-            else:
-                content, model_name = openrouter_chat_completion(
-                    config.openrouter_api_key,
-                    config.openrouter_base_url,
-                    config.openrouter_model,
-                    messages,
-                    config.llm_timeout_seconds,
-                )
-            parsed = parse_json_from_text(content)
-            markdown = str(
-                parsed.get("markdown") or parsed.get("content") or parsed.get("text") or ""
-            ).strip()
-            short_summary = str(parsed.get("shortSummary") or "").strip()
-            if not markdown:
-                raise RuntimeError("LLM вернул пустое поле markdown.")
-            return {
-                "markdown": markdown,
-                "shortSummary": short_summary,
-                "provider": provider,
-                "model": model_name,
-                "attempts": attempts + [{"provider": provider, "ok": True}],
-                "sourceTextLength": len(normalized_source),
-                "promptKey": prompt_key,
-            }
-        except Exception as exc:
-            attempts.append({"provider": provider, "ok": False, "error": str(exc)})
-
-    details = "; ".join(
-        f"{item['provider']}: {item['error']}" for item in attempts if not item["ok"]
-    )
-    raise RuntimeError(f"Все LLM-провайдеры завершились ошибкой: {details}")
+    provider = resolve_llm_provider(config)
+    try:
+        if provider == "openai":
+            content, model_name = openai_chat_completion(
+                config.openai_api_key,
+                config.openai_model,
+                messages,
+                config.llm_timeout_seconds,
+            )
+        else:
+            content, model_name = openrouter_chat_completion(
+                config.openrouter_api_key,
+                config.openrouter_base_url,
+                config.openrouter_model,
+                messages,
+                config.llm_timeout_seconds,
+            )
+        parsed = parse_json_from_text(content)
+        markdown = str(
+            parsed.get("markdown") or parsed.get("content") or parsed.get("text") or ""
+        ).strip()
+        short_summary = str(parsed.get("shortSummary") or "").strip()
+        if not markdown:
+            raise RuntimeError("LLM вернул пустое поле markdown.")
+        return {
+            "markdown": markdown,
+            "shortSummary": short_summary,
+            "provider": provider,
+            "model": model_name,
+            "attempts": [{"provider": provider, "ok": True}],
+            "sourceTextLength": len(normalized_source),
+            "promptKey": prompt_key,
+        }
+    except Exception as exc:
+        raise RuntimeError(f"LLM-провайдер {provider} завершился ошибкой: {exc}") from exc
 
 
 def stage_prompt_metadata(stage: str) -> dict[str, Any]:
@@ -1129,7 +1153,11 @@ def salutespeech_request(
         except Exception:
             details = ""
         suffix = f": {details}" if details else ""
-        raise RuntimeError(f"HTTP {exc.code} from {url}{suffix}") from exc
+        message = normalize_provider_error(
+            "salutespeech",
+            f"HTTP {exc.code} from {url}{suffix}",
+        )
+        raise RuntimeError(message) from exc
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -1635,58 +1663,39 @@ def generate_meeting_markdown_with_llm(
         {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
     ]
 
-    available_providers: list[str] = []
-    if config.openai_api_key.strip():
-        available_providers.append("openai")
-    if config.openrouter_api_key.strip():
-        available_providers.append("openrouter")
-    if not available_providers:
-        raise RuntimeError("OPENAI_API_KEY или OPENROUTER_API_KEY не заданы.")
+    provider = resolve_llm_provider(config)
 
-    primary = config.llm_primary_provider
-    if primary not in ("openai", "openrouter"):
-        primary = "openai"
-    ordered = [primary, "openrouter" if primary == "openai" else "openai"]
-    ordered = [provider for provider in ordered if provider in available_providers]
-    attempts: list[dict[str, Any]] = []
-
-    for provider in ordered:
-        try:
-            if provider == "openai":
-                content, model_name = openai_chat_completion(
-                    config.openai_api_key,
-                    config.openai_model,
-                    messages,
-                    config.llm_timeout_seconds,
-                )
-            else:
-                content, model_name = openrouter_chat_completion(
-                    config.openrouter_api_key,
-                    config.openrouter_base_url,
-                    config.openrouter_model,
-                    messages,
-                    config.llm_timeout_seconds,
-                )
-            parsed = parse_json_from_text(content)
-            markdown = str(parsed.get("markdown") or "").strip()
-            short_summary = str(parsed.get("shortSummary") or "").strip()
-            if not markdown:
-                raise RuntimeError("LLM вернул пустое поле markdown.")
-            return {
-                **parsed,
-                "markdown": markdown,
-                "shortSummary": short_summary,
-                "provider": provider,
-                "model": model_name,
-                "attempts": attempts + [{"provider": provider, "ok": True}],
-            }
-        except Exception as exc:
-            attempts.append({"provider": provider, "ok": False, "error": str(exc)})
-
-    details = "; ".join(
-        f"{item['provider']}: {item['error']}" for item in attempts if not item["ok"]
-    )
-    raise RuntimeError(f"Все LLM-провайдеры завершились ошибкой: {details}")
+    try:
+        if provider == "openai":
+            content, model_name = openai_chat_completion(
+                config.openai_api_key,
+                config.openai_model,
+                messages,
+                config.llm_timeout_seconds,
+            )
+        else:
+            content, model_name = openrouter_chat_completion(
+                config.openrouter_api_key,
+                config.openrouter_base_url,
+                config.openrouter_model,
+                messages,
+                config.llm_timeout_seconds,
+            )
+        parsed = parse_json_from_text(content)
+        markdown = str(parsed.get("markdown") or "").strip()
+        short_summary = str(parsed.get("shortSummary") or "").strip()
+        if not markdown:
+            raise RuntimeError("LLM вернул пустое поле markdown.")
+        return {
+            **parsed,
+            "markdown": markdown,
+            "shortSummary": short_summary,
+            "provider": provider,
+            "model": model_name,
+            "attempts": [{"provider": provider, "ok": True}],
+        }
+    except Exception as exc:
+        raise RuntimeError(f"LLM-провайдер {provider} завершился ошибкой: {exc}") from exc
 
 
 def meeting_actions_json_from_llm(result: dict[str, Any], markdown: str) -> dict[str, Any]:

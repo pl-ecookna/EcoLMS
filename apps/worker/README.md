@@ -39,7 +39,7 @@
 - `POSTGRES_URL`
 - `REDIS_URL`
 - `S3_*`
-- `OPENAI_*` или `OPENROUTER_*`
+- `LLM_PRIMARY_PROVIDER` и набор переменных только для выбранного провайдера: `OPENAI_*` или `OPENROUTER_*`
 - для модуля `meetings`: `WORKER_MEETING_JOB_QUEUE_KEY` и `SALUTESPEECH_*`
 
 Для обработки встреч в окружении также должен быть доступен `ffmpeg`.

@@ -1,4 +1,6 @@
 import { Injectable } from "@nestjs/common"
+import { readFile } from "node:fs/promises"
+import { Agent as HttpsAgent, request as httpsRequest } from "node:https"
 
 import { PostgresService } from "./db/postgres.service"
 import { RedisQueueService } from "./redis/redis.service"
@@ -22,7 +24,8 @@ type HealthSnapshot = {
       api: ServiceState
       postgres: ServiceState
       redis: ServiceState
-      openai: ServiceState
+      llm: ServiceState
+      salutespeech: ServiceState
       worker: ServiceState
       transcriptionService: ServiceState
     }
@@ -72,6 +75,44 @@ export class AppService {
     })
   }
 
+  private hasBillingIssue(details: string) {
+    const normalized = details.toLowerCase()
+    return [
+      "insufficient_quota",
+      "insufficient quota",
+      "insufficient funds",
+      "out of credits",
+      "payment required",
+      "billing",
+      "quota exceeded",
+      "not enough credits",
+      "credit balance",
+      "balance",
+      "недостаточно средств",
+      "недостаточно денег",
+      "недостаточно кредитов",
+      "исчерпан лимит",
+      "квота",
+      "quota",
+      "402",
+    ].some((pattern) => normalized.includes(pattern))
+  }
+
+  private formatBillingDetails(provider: string, details: string) {
+    if (this.hasBillingIssue(details)) {
+      return `${provider}: недостаточно средств или исчерпана квота`
+    }
+    return details
+  }
+
+  private async readResponseTextSafe(response: Response) {
+    try {
+      return (await response.text()).trim()
+    } catch {
+      return ""
+    }
+  }
+
   private async checkPostgres(): Promise<ServiceState> {
     const checkedAt = this.nowIso()
     try {
@@ -104,30 +145,39 @@ export class AppService {
     }
   }
 
-  private async checkOpenAI(): Promise<ServiceState> {
+  private async checkLlmProvider(): Promise<ServiceState> {
     const checkedAt = this.nowIso()
+    const provider = (process.env.LLM_PRIMARY_PROVIDER || "openai").trim().toLowerCase()
     const openAiKey = process.env.OPENAI_API_KEY?.trim()
     const openRouterKey = process.env.OPENROUTER_API_KEY?.trim()
 
-    if (!openAiKey && !openRouterKey) {
+    const target =
+      provider === "openrouter"
+        ? openRouterKey
+          ? {
+              url: "https://openrouter.ai/api/v1/models",
+              headers: { Authorization: `Bearer ${openRouterKey}` },
+              name: "OpenRouter",
+            }
+          : null
+        : openAiKey
+          ? {
+              url: "https://api.openai.com/v1/models",
+              headers: { Authorization: `Bearer ${openAiKey}` },
+              name: "OpenAI",
+            }
+          : null
+
+    if (!target) {
       return {
         status: "unknown",
-        details: "Ключ OpenAI/OpenRouter не задан",
+        details:
+          provider === "openrouter"
+            ? "Выбран OpenRouter, но OPENROUTER_API_KEY не задан"
+            : "Выбран OpenAI, но OPENAI_API_KEY не задан",
         checkedAt,
       }
     }
-
-    const target = openAiKey
-      ? {
-          url: "https://api.openai.com/v1/models",
-          headers: { Authorization: `Bearer ${openAiKey}` },
-          name: "OpenAI",
-        }
-      : {
-          url: "https://openrouter.ai/api/v1/models",
-          headers: { Authorization: `Bearer ${openRouterKey}` },
-          name: "OpenRouter",
-        }
 
     try {
       const response = (await this.runWithTimeout(
@@ -139,18 +189,139 @@ export class AppService {
       )) as Response
 
       if (response.ok) {
-        return { status: "up", details: `${target.name} доступен`, checkedAt }
+        const balanceDetails =
+          target.name === "OpenRouter"
+            ? "Баланс по обычному API-ключу заранее не проверяется"
+            : "Официальный API OpenAI не возвращает остаток баланса заранее"
+        return {
+          status: "up",
+          details: `${target.name} доступен. ${balanceDetails}.`,
+          checkedAt,
+        }
       }
 
+      const rawDetails = await this.readResponseTextSafe(response)
+      const details = this.formatBillingDetails(
+        target.name,
+        rawDetails || `HTTP ${response.status}`
+      )
+
       return {
-        status: "degraded",
-        details: `${target.name}: HTTP ${response.status}`,
+        status: this.hasBillingIssue(details) ? "down" : "degraded",
+        details,
         checkedAt,
       }
     } catch (error) {
+      const details =
+        error instanceof Error ? this.formatBillingDetails(target.name, error.message) : `${target.name} недоступен`
       return {
-        status: "down",
-        details: error instanceof Error ? error.message : `${target.name} недоступен`,
+        status: this.hasBillingIssue(details) ? "down" : "down",
+        details,
+        checkedAt,
+      }
+    }
+  }
+
+  private async requestSaluteSpeechOAuth(
+    url: string,
+    headers: Record<string, string>,
+    body: string,
+    timeoutMs: number,
+    caCertPath: string
+  ): Promise<{ statusCode: number; body: string }> {
+    const ca = caCertPath ? await readFile(caCertPath, "utf-8") : undefined
+
+    return new Promise((resolve, reject) => {
+      const req = httpsRequest(
+        url,
+        {
+          method: "POST",
+          headers,
+          agent: new HttpsAgent({
+            ca,
+            rejectUnauthorized: true,
+          }),
+        },
+        (response) => {
+          const chunks: Buffer[] = []
+          response.on("data", (chunk) => {
+            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+          })
+          response.on("end", () => {
+            resolve({
+              statusCode: response.statusCode ?? 0,
+              body: Buffer.concat(chunks).toString("utf-8"),
+            })
+          })
+        }
+      )
+
+      req.setTimeout(timeoutMs, () => {
+        req.destroy(new Error(`Timeout after ${timeoutMs}ms`))
+      })
+      req.on("error", reject)
+      req.write(body)
+      req.end()
+    })
+  }
+
+  private async checkSaluteSpeech(): Promise<ServiceState> {
+    const checkedAt = this.nowIso()
+    const authKey = process.env.SALUTESPEECH_AUTH_KEY?.trim()
+    const oauthUrl = process.env.SALUTESPEECH_OAUTH_URL?.trim()
+    const scope = process.env.SALUTESPEECH_SCOPE?.trim() || "SALUTE_SPEECH_PERS"
+    const caCertPath = process.env.SALUTESPEECH_CA_CERT_PATH?.trim() || ""
+
+    if (!authKey || !oauthUrl) {
+      return {
+        status: "unknown",
+        details: "SaluteSpeech не настроен: отсутствует OAuth-конфигурация",
+        checkedAt,
+      }
+    }
+
+    try {
+      const response = await this.runWithTimeout(
+        () =>
+          this.requestSaluteSpeechOAuth(
+            oauthUrl,
+            {
+              Authorization: `Basic ${authKey}`,
+              RqUID: crypto.randomUUID(),
+              "Content-Type": "application/x-www-form-urlencoded",
+              Accept: "application/json",
+            },
+            `scope=${encodeURIComponent(scope)}`,
+            5_000,
+            caCertPath
+          ),
+        6_000
+      )
+      const { statusCode, body } = response as { statusCode: number; body: string }
+      if (statusCode >= 200 && statusCode < 300) {
+        return {
+          status: "up",
+          details: "SaluteSpeech доступен. Баланс заранее не проверяется публичным API.",
+          checkedAt,
+        }
+      }
+      const details = this.formatBillingDetails(
+        "SaluteSpeech",
+        body || `HTTP ${statusCode}`
+      )
+      return {
+        status: this.hasBillingIssue(details) ? "down" : "degraded",
+        details,
+        checkedAt,
+      }
+    } catch (error) {
+      const details =
+        error instanceof Error
+          ? this.formatBillingDetails("SaluteSpeech", error.message)
+          : "SaluteSpeech недоступен"
+      return {
+        status: this.hasBillingIssue(details) ? "down" : "down",
+        details,
         checkedAt,
       }
     }
@@ -257,10 +428,11 @@ export class AppService {
       checkedAt: timestamp,
     }
 
-    const [postgres, redis, openai, worker, transcriptionService] = await Promise.all([
+    const [postgres, redis, llm, salutespeech, worker, transcriptionService] = await Promise.all([
       this.checkPostgres(),
       this.checkRedis(),
-      this.checkOpenAI(),
+      this.checkLlmProvider(),
+      this.checkSaluteSpeech(),
       this.checkWorker(),
       this.checkTranscriptionService(),
     ])
@@ -272,7 +444,8 @@ export class AppService {
       api,
       postgres,
       redis,
-      openai,
+      llm,
+      salutespeech,
       worker,
       transcriptionService,
     ])
@@ -287,7 +460,8 @@ export class AppService {
           api,
           postgres,
           redis,
-          openai,
+          llm,
+          salutespeech,
           worker,
           transcriptionService,
         },
