@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState, type DragEvent } from "react"
+import Link from "next/link"
 import {
   ActivityIcon,
   AlertCircleIcon,
@@ -1163,6 +1164,9 @@ export function EcolmsDashboard() {
                 </div>
               </HoverCardContent>
             </HoverCard>
+            <Link href="/meetings" className={buttonVariants({ variant: "outline", size: "sm" })}>
+              Модуль встреч
+            </Link>
           </header>
 
           {listError ? (

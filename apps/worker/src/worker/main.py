@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 import os
 import socket
@@ -8,6 +7,7 @@ import ssl
 import subprocess
 import tempfile
 import time
+import uuid
 from io import BytesIO
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -17,7 +17,9 @@ from urllib import request as urlrequest
 from urllib.parse import urlparse, unquote
 
 import boto3
+import certifi
 import psycopg
+from botocore.config import Config
 from docx import Document
 from pptx import Presentation
 from pypdf import PdfReader
@@ -50,9 +52,15 @@ class WorkerConfig:
     salutespeech_auth_key: str = ""
     salutespeech_oauth_url: str = ""
     salutespeech_rest_url: str = "https://smartspeech.sber.ru/rest/v1"
+    salutespeech_upload_url: str = "https://smartspeech.sber.ru/rest/v1/data:upload"
+    salutespeech_recognize_url: str = "https://smartspeech.sber.ru/rest/v1/speech:async_recognize"
+    salutespeech_task_url: str = "https://smartspeech.sber.ru/rest/v1/task:get"
+    salutespeech_download_url: str = "https://smartspeech.sber.ru/rest/v1/data:download"
     salutespeech_scope: str = "SALUTE_SPEECH_PERS"
     salutespeech_model: str = "general"
     salutespeech_language: str = "ru-RU"
+    salutespeech_ca_cert_path: str = ""
+    salutespeech_ssl_no_verify: bool = False
     salutespeech_poll_interval_seconds: float = 5.0
     salutespeech_timeout_seconds: float = 1800.0
 
@@ -65,6 +73,14 @@ EXTERNAL_POSTGRES_URL = (
 )
 INTERNAL_REDIS_URL = "redis://redis:6379"
 EXTERNAL_REDIS_URL = "redis://localhost:6381"
+_LLM_SSL_CONTEXT: ssl.SSLContext | None = None
+
+
+def llm_ssl_context() -> ssl.SSLContext:
+    global _LLM_SSL_CONTEXT
+    if _LLM_SSL_CONTEXT is None:
+        _LLM_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+    return _LLM_SSL_CONTEXT
 
 
 def normalize_service_url(value: str | None, *, default_prod: str, default_dev: str) -> str:
@@ -88,6 +104,11 @@ def normalize_service_url(value: str | None, *, default_prod: str, default_dev: 
 
 
 def load_config() -> WorkerConfig:
+    salutespeech_auth_key = os.getenv("SALUTESPEECH_AUTH_KEY", "").strip()
+    salutespeech_rest_url = os.getenv(
+        "SALUTESPEECH_REST_URL",
+        "https://smartspeech.sber.ru/rest/v1",
+    ).strip()
     return WorkerConfig(
         api_base_url=normalize_service_url(
             os.getenv("API_BASE_URL"),
@@ -125,14 +146,31 @@ def load_config() -> WorkerConfig:
         llm_timeout_seconds=float(os.getenv("LLM_TIMEOUT_SECONDS", "120")),
         job_queue_key=os.getenv("WORKER_JOB_QUEUE_KEY", "ecolms:processing-jobs"),
         meeting_job_queue_key=os.getenv("WORKER_MEETING_JOB_QUEUE_KEY", "ecolms:meeting-jobs"),
-        salutespeech_auth_key=os.getenv("SALUTESPEECH_AUTH_KEY", "").strip(),
+        salutespeech_auth_key=salutespeech_auth_key,
         salutespeech_oauth_url=os.getenv("SALUTESPEECH_OAUTH_URL", "").strip(),
-        salutespeech_rest_url=os.getenv(
-            "SALUTESPEECH_REST_URL", "https://smartspeech.sber.ru/rest/v1"
+        salutespeech_rest_url=salutespeech_rest_url,
+        salutespeech_upload_url=os.getenv(
+            "SALUTESPEECH_UPLOAD_URL",
+            f"{salutespeech_rest_url.rstrip('/')}/data:upload",
+        ).strip(),
+        salutespeech_recognize_url=os.getenv(
+            "SALUTESPEECH_RECOGNIZE_URL",
+            f"{salutespeech_rest_url.rstrip('/')}/speech:async_recognize",
+        ).strip(),
+        salutespeech_task_url=os.getenv(
+            "SALUTESPEECH_TASK_URL",
+            f"{salutespeech_rest_url.rstrip('/')}/task:get",
+        ).strip(),
+        salutespeech_download_url=os.getenv(
+            "SALUTESPEECH_DOWNLOAD_URL",
+            f"{salutespeech_rest_url.rstrip('/')}/data:download",
         ).strip(),
         salutespeech_scope=os.getenv("SALUTESPEECH_SCOPE", "SALUTE_SPEECH_PERS").strip(),
         salutespeech_model=os.getenv("SALUTESPEECH_MODEL", "general").strip() or "general",
         salutespeech_language=os.getenv("SALUTESPEECH_LANGUAGE", "ru-RU").strip() or "ru-RU",
+        salutespeech_ca_cert_path=os.getenv("SALUTESPEECH_CA_CERT_PATH", "").strip(),
+        salutespeech_ssl_no_verify=os.getenv("SALUTESPEECH_SSL_NO_VERIFY", "false").strip().lower()
+        in {"1", "true", "yes", "on"},
         salutespeech_poll_interval_seconds=float(
             os.getenv("SALUTESPEECH_POLL_INTERVAL_SECONDS", "5")
         ),
@@ -357,6 +395,22 @@ def parse_json_from_text(value: str) -> dict[str, Any]:
     return parsed
 
 
+def parse_json(value: Any, fallback: dict[str, Any]) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return fallback
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return fallback
+        if isinstance(parsed, dict):
+            return parsed
+    return fallback
+
+
 def openai_chat_completion(
     api_key: str, model: str, messages: list[dict[str, str]], timeout_seconds: float
 ) -> tuple[str, str]:
@@ -375,7 +429,11 @@ def openai_chat_completion(
             "Content-Type": "application/json; charset=utf-8",
         },
     )
-    with urlrequest.urlopen(req, timeout=timeout_seconds) as response:
+    with urlrequest.urlopen(
+        req,
+        timeout=timeout_seconds,
+        context=llm_ssl_context(),
+    ) as response:
         body = json.loads(response.read().decode("utf-8"))
     content = (
         body.get("choices", [{}])[0]
@@ -412,7 +470,11 @@ def openrouter_chat_completion(
             "X-Title": "EcoLMS Worker",
         },
     )
-    with urlrequest.urlopen(req, timeout=timeout_seconds) as response:
+    with urlrequest.urlopen(
+        req,
+        timeout=timeout_seconds,
+        context=llm_ssl_context(),
+    ) as response:
         body = json.loads(response.read().decode("utf-8"))
     content = (
         body.get("choices", [{}])[0]
@@ -808,6 +870,15 @@ def s3_client(config: WorkerConfig) -> Any:
         aws_access_key_id=config.s3_access_key_id,
         aws_secret_access_key=config.s3_secret_access_key,
         region_name=config.s3_region,
+        config=Config(
+            signature_version="s3v4",
+            s3={
+                "addressing_style": "path",
+                # Some S3-compatible providers reject signed payload hashing
+                # for PUT requests; using unsigned payload avoids false mismatch.
+                "payload_signing_enabled": False,
+            },
+        ),
     )
 
 
@@ -1025,10 +1096,6 @@ def set_job_failed(conn: psycopg.Connection, job_id: str, error_text: str) -> No
     )
 
 
-def salutespeech_ssl_context() -> ssl.SSLContext:
-    return ssl.create_default_context()
-
-
 def salutespeech_request(
     url: str,
     *,
@@ -1036,22 +1103,43 @@ def salutespeech_request(
     headers: dict[str, str] | None = None,
     data: bytes | None = None,
     timeout: float = 60.0,
-) -> dict[str, Any]:
+    verify_ssl: bool = True,
+    ca_cert_path: str = "",
+) -> Any:
     request = urlrequest.Request(
         url,
         method=method,
         data=data,
         headers=headers or {},
     )
-    with urlrequest.urlopen(
-        request,
-        timeout=timeout,
-        context=salutespeech_ssl_context(),
-    ) as response:
-        raw = response.read().decode("utf-8")
-    payload = json.loads(raw)
-    if not isinstance(payload, dict):
-        raise RuntimeError("SaluteSpeech вернул невалидный JSON.")
+    if not verify_ssl:
+        ssl_context = ssl._create_unverified_context()
+    elif ca_cert_path:
+        ssl_context = ssl.create_default_context(cafile=ca_cert_path)
+    else:
+        ssl_context = ssl.create_default_context()
+    try:
+        with urlrequest.urlopen(request, timeout=timeout, context=ssl_context) as response:
+            raw_bytes = response.read()
+            content_type = str(response.headers.get("Content-Type") or "")
+            raw = raw_bytes.decode("utf-8", errors="replace")
+    except urlerror.HTTPError as exc:
+        try:
+            details = exc.read().decode("utf-8", errors="ignore").strip()
+        except Exception:
+            details = ""
+        suffix = f": {details}" if details else ""
+        raise RuntimeError(f"HTTP {exc.code} from {url}{suffix}") from exc
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        snippet = raw[:500].replace("\n", "\\n")
+        suffix = f" content-type={content_type}" if content_type else ""
+        raise RuntimeError(
+            f"SaluteSpeech вернул невалидный JSON.{suffix} body={snippet}"
+        ) from exc
+    if not isinstance(payload, (dict, list)):
+        raise RuntimeError("SaluteSpeech вернул невалидный JSON-тип.")
     return payload
 
 
@@ -1068,11 +1156,15 @@ def get_salutespeech_access_token(config: WorkerConfig) -> str:
         data=data,
         headers={
             "Authorization": f"Basic {config.salutespeech_auth_key}",
-            "RqUID": f"ecolms-{int(time.time() * 1000)}",
+            "RqUID": str(uuid.uuid4()),
             "Content-Type": "application/x-www-form-urlencoded",
         },
         timeout=30.0,
+        verify_ssl=not config.salutespeech_ssl_no_verify,
+        ca_cert_path=config.salutespeech_ca_cert_path,
     )
+    if not isinstance(payload, dict):
+        raise RuntimeError("SaluteSpeech OAuth вернул неожиданный формат ответа.")
     token = str(
         payload.get("access_token")
         or payload.get("result", {}).get("access_token")
@@ -1098,7 +1190,7 @@ def salutespeech_upload_file(
 ) -> str:
     body, boundary = encode_multipart_form("file", file_name, content)
     payload = salutespeech_request(
-        f"{config.salutespeech_rest_url.rstrip('/')}/data:upload",
+        config.salutespeech_upload_url,
         method="POST",
         data=body,
         headers={
@@ -1106,7 +1198,11 @@ def salutespeech_upload_file(
             "Content-Type": f"multipart/form-data; boundary={boundary}",
         },
         timeout=120.0,
+        verify_ssl=not config.salutespeech_ssl_no_verify,
+        ca_cert_path=config.salutespeech_ca_cert_path,
     )
+    if not isinstance(payload, dict):
+        raise RuntimeError("SaluteSpeech upload вернул неожиданный формат ответа.")
     request_file_id = str(
         payload.get("result", {}).get("request_file_id")
         or payload.get("request_file_id")
@@ -1122,23 +1218,29 @@ def salutespeech_create_recognition_task(
     token: str,
     *,
     request_file_id: str,
+    audio_encoding: str,
     sample_rate: int,
     channels_count: int,
 ) -> str:
+    options: dict[str, Any] = {
+        "model": config.salutespeech_model,
+        "language": config.salutespeech_language,
+        "audio_encoding": audio_encoding,
+        "channels_count": channels_count,
+        "speaker_separation_options": {
+            "enable": True,
+        },
+    }
+    if audio_encoding in {"PCM_S16LE", "ALAW", "MULAW"}:
+        options["sample_rate"] = sample_rate
+
     payload = salutespeech_request(
-        f"{config.salutespeech_rest_url.rstrip('/')}/speech:async_recognize",
+        config.salutespeech_recognize_url,
         method="POST",
         data=json.dumps(
             {
                 "request_file_id": request_file_id,
-                "options": {
-                    "model": config.salutespeech_model,
-                    "language": config.salutespeech_language,
-                    "audio_encoding": "PCM_S16LE",
-                    "sample_rate": sample_rate,
-                    "channels_count": channels_count,
-                    "speaker_info": True,
-                },
+                "options": options,
             },
             ensure_ascii=False,
         ).encode("utf-8"),
@@ -1147,7 +1249,11 @@ def salutespeech_create_recognition_task(
             "Content-Type": "application/json; charset=utf-8",
         },
         timeout=60.0,
+        verify_ssl=not config.salutespeech_ssl_no_verify,
+        ca_cert_path=config.salutespeech_ca_cert_path,
     )
+    if not isinstance(payload, dict):
+        raise RuntimeError("SaluteSpeech recognize вернул неожиданный формат ответа.")
     task_id = str(payload.get("result", {}).get("id") or payload.get("id") or "").strip()
     if not task_id:
         raise RuntimeError("SaluteSpeech не вернул id задачи распознавания.")
@@ -1155,20 +1261,27 @@ def salutespeech_create_recognition_task(
 
 
 def salutespeech_get_task_status(config: WorkerConfig, token: str, task_id: str) -> dict[str, Any]:
-    return salutespeech_request(
-        f"{config.salutespeech_rest_url.rstrip('/')}/task:get?id={task_id}",
+    payload = salutespeech_request(
+        f"{config.salutespeech_task_url}?id={task_id}",
         headers={"Authorization": f"Bearer {token}"},
         timeout=30.0,
+        verify_ssl=not config.salutespeech_ssl_no_verify,
+        ca_cert_path=config.salutespeech_ca_cert_path,
     )
+    if not isinstance(payload, dict):
+        raise RuntimeError("SaluteSpeech task:get вернул неожиданный формат ответа.")
+    return payload
 
 
 def salutespeech_download_result(
     config: WorkerConfig, token: str, response_file_id: str
-) -> dict[str, Any]:
+) -> Any:
     return salutespeech_request(
-        f"{config.salutespeech_rest_url.rstrip('/')}/data:download?response_file_id={response_file_id}",
+        f"{config.salutespeech_download_url}?response_file_id={response_file_id}",
         headers={"Authorization": f"Bearer {token}"},
         timeout=120.0,
+        verify_ssl=not config.salutespeech_ssl_no_verify,
+        ca_cert_path=config.salutespeech_ca_cert_path,
     )
 
 
@@ -1178,8 +1291,19 @@ def extract_float(value: Any) -> float | None:
     if isinstance(value, (int, float)):
         return float(value)
     if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized.endswith("ms"):
+            try:
+                return float(normalized[:-2].strip()) / 1000.0
+            except ValueError:
+                return None
+        if normalized.endswith("s"):
+            try:
+                return float(normalized[:-1].strip())
+            except ValueError:
+                return None
         try:
-            return float(value)
+            return float(normalized)
         except ValueError:
             return None
     return None
@@ -1208,9 +1332,65 @@ def collect_segment_candidates(value: Any, results: list[dict[str, Any]]) -> Non
             collect_segment_candidates(item, results)
 
 
-def parse_salutespeech_segments(payload: dict[str, Any]) -> list[dict[str, Any]]:
+def collect_chunk_style_candidates(value: Any, results: list[dict[str, Any]]) -> None:
+    if isinstance(value, dict):
+        speaker_info = value.get("speaker_info")
+        speaker_id: int | None = None
+        if isinstance(speaker_info, dict):
+            speaker_raw = speaker_info.get("speaker_id")
+            if isinstance(speaker_raw, int):
+                speaker_id = speaker_raw
+            elif isinstance(speaker_raw, str):
+                try:
+                    speaker_id = int(speaker_raw)
+                except ValueError:
+                    speaker_id = None
+
+        hypotheses = value.get("results")
+        if isinstance(hypotheses, list) and speaker_id is not None and speaker_id >= 0:
+            for item in hypotheses:
+                if not isinstance(item, dict):
+                    continue
+                text = str(item.get("text") or "").strip()
+                if text:
+                    results.append(
+                        {
+                            "speaker_id": speaker_id,
+                            "text": text,
+                            "start": item.get("start"),
+                            "end": item.get("end"),
+                            "confidence": item.get("confidence"),
+                        }
+                    )
+                word_alignments = item.get("word_alignments")
+                if isinstance(word_alignments, list):
+                    for word_item in word_alignments:
+                        if not isinstance(word_item, dict):
+                            continue
+                        word = str(word_item.get("word") or "").strip()
+                        if not word:
+                            continue
+                        results.append(
+                            {
+                                "speaker_id": speaker_id,
+                                "word": word,
+                                "start": word_item.get("start"),
+                                "end": word_item.get("end"),
+                                "confidence": word_item.get("confidence"),
+                            }
+                        )
+
+        for nested in value.values():
+            collect_chunk_style_candidates(nested, results)
+    elif isinstance(value, list):
+        for item in value:
+            collect_chunk_style_candidates(item, results)
+
+
+def parse_salutespeech_segments(payload: Any) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     collect_segment_candidates(payload, candidates)
+    collect_chunk_style_candidates(payload, candidates)
     segment_like: list[dict[str, Any]] = []
     word_like: list[dict[str, Any]] = []
 
@@ -1769,7 +1949,8 @@ def ffprobe_audio_details(source_path: str) -> tuple[int, int, float]:
         payload.get("streams", [{}])[0].get("channels") or 1
     )
     duration = float(payload.get("format", {}).get("duration") or 0.0)
-    target_channels = 2 if channels > 1 else 1
+    # Для V1 diarization в SaluteSpeech используем моно-канал.
+    target_channels = 1
     return channels, target_channels, duration
 
 
@@ -1792,7 +1973,7 @@ def prepare_meeting_audio(
     with tempfile.NamedTemporaryFile(suffix=source_suffix, delete=False) as src:
         src.write(source_bytes)
         source_path = src.name
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as out:
+    with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as out:
         output_path = out.name
 
     try:
@@ -1809,9 +1990,13 @@ def prepare_meeting_audio(
             "-ac",
             str(target_channels),
             "-ar",
-            "16000",
+            "48000",
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "48k",
             "-f",
-            "wav",
+            "ogg",
             output_path,
         ]
         result = subprocess.run(command, capture_output=True, text=True)
@@ -1820,21 +2005,40 @@ def prepare_meeting_audio(
             raise RuntimeError(f"FFmpeg audio preparation failed: {details or 'unknown error'}")
         with open(output_path, "rb") as file:
             audio_bytes = file.read()
-        audio_storage_key = f"meetings/{source_file['meeting_id']}/derived/prepared-audio.wav"
-        upload_s3_object_bytes(
-            config,
-            audio_storage_key,
-            audio_bytes,
-            "audio/x-wav",
-        )
+        audio_storage_key: str | None = f"meetings/{source_file['meeting_id']}/derived/prepared-audio.wav"
+        try:
+            upload_s3_object_bytes(
+                config,
+                audio_storage_key,
+                audio_bytes,
+                "audio/ogg",
+            )
+        except Exception as upload_error:
+            # Prepared audio is an auxiliary artifact. If provider-specific
+            # S3 upload fails, keep processing with in-memory bytes.
+            print(
+                json.dumps(
+                    {
+                        "service": "worker",
+                        "status": "warning",
+                        "scope": "meetings",
+                        "event": "prepared-audio-upload-failed",
+                        "meetingId": source_file.get("meeting_id"),
+                        "error": str(upload_error),
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            audio_storage_key = None
         return {
             "audio_storage_key": audio_storage_key,
-            "audio_mime_type": "audio/x-wav",
+            "audio_mime_type": "audio/ogg",
             "duration_seconds": int(round(duration)) if duration > 0 else None,
-            "sample_rate": 16000,
+            "sample_rate": 48000,
             "channels_count": target_channels,
+            "audio_encoding": "OPUS",
             "audio_bytes": audio_bytes,
-            "file_name": "prepared-audio.wav",
+            "file_name": "prepared-audio.ogg",
         }
     finally:
         try:
@@ -1862,6 +2066,7 @@ def transcribe_meeting_with_salutespeech(
         config,
         token,
         request_file_id=request_file_id,
+        audio_encoding=str(prepared_audio.get("audio_encoding") or "PCM_S16LE"),
         sample_rate=int(prepared_audio["sample_rate"]),
         channels_count=int(prepared_audio["channels_count"]),
     )

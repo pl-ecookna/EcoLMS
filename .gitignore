@@ -13,3 +13,5 @@ apps/*/node_modules
 apps/*/.next
 apps/*/dist
 apps/*/__pycache__/
+samples/
+*.egg-info/

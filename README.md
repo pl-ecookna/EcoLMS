@@ -1,6 +1,6 @@
 # EcoLMS
 
-EcoLMS — внутренняя платформа для работы с контентом из медиа- и документных источников. Сейчас в репозитории уже реализован workflow генерации обучающих курсов, а для `meetings` добавлены backend API, схема БД и worker pipeline под `SaluteSpeech`. Репозиторий организован как `pnpm`-монорепозиторий с четырьмя приложениями: `web`, `api`, `worker` и `transcription-service`.
+EcoLMS — внутренняя платформа для работы с контентом из медиа- и документных источников. Сейчас в репозитории уже реализован workflow генерации обучающих курсов, а для `meetings` добавлены backend API, схема БД, worker pipeline под `SaluteSpeech` и UI-раздел `/meetings`. Репозиторий организован как `pnpm`-монорепозиторий с четырьмя приложениями: `web`, `api`, `worker` и `transcription-service`.
 
 ## Актуальный стек
 
@@ -14,7 +14,7 @@ EcoLMS — внутренняя платформа для работы с кон
 
 ## Структура репозитория
 
-- `apps/web` — UI на Next.js с App Router
+- `apps/web` — UI на Next.js с App Router, включая `courses` и `meetings`
 - `apps/api` — NestJS API для `courses`, `meetings`, загрузок, задач, артефактов и health-check
 - `apps/worker` — фоновая обработка файлов, генерация этапов курса и pipeline модуля `meetings`
 - `apps/transcription-service` — сервис транскрибации аудио и видео
@@ -102,7 +102,8 @@ Browser
 - один файл на встречу;
 - целевой провайдер распознавания и диаризации: `SaluteSpeech`;
 - канонический результат хранится в PostgreSQL, а сырой ответ провайдера сохраняется в `job result_json`;
-- ручная правка speaker labels предусмотрена в UI и модели данных.
+- ручная правка speaker labels предусмотрена в UI и модели данных;
+- UI-раздел `/meetings` уже добавлен и показывает список встреч, карточку встречи и единый markdown-файл.
 
 Что уже есть в backend:
 
@@ -121,6 +122,8 @@ Browser
 5. Запустить web: `pnpm dev:web`.
 6. При необходимости запустить transcription service: `pnpm dev:transcription`.
 7. При необходимости запустить worker: `pnpm dev:worker`.
+
+Примечание: `pnpm dev:worker` использует `uv` и зависимости из [apps/worker/pyproject.toml](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/apps/worker/pyproject.toml), а для обработки встреч `meetings` worker требует доступный `ffmpeg`.
 
 ## Основные команды
 
@@ -160,9 +163,15 @@ Browser
 - `SALUTESPEECH_AUTH_KEY`
 - `SALUTESPEECH_OAUTH_URL`
 - `SALUTESPEECH_REST_URL`
+- `SALUTESPEECH_UPLOAD_URL`
+- `SALUTESPEECH_RECOGNIZE_URL`
+- `SALUTESPEECH_TASK_URL`
+- `SALUTESPEECH_DOWNLOAD_URL`
 - `SALUTESPEECH_SCOPE`
 - `SALUTESPEECH_MODEL`
 - `SALUTESPEECH_LANGUAGE`
+- `SALUTESPEECH_CA_CERT_PATH`
+- `SALUTESPEECH_SSL_NO_VERIFY`
 - `SALUTESPEECH_POLL_INTERVAL_SECONDS`
 - `SALUTESPEECH_TIMEOUT_SECONDS`
 

@@ -9,7 +9,7 @@
     "dev:api": "pnpm --dir apps/api dev",
     "dev:ui": "sh ./scripts/dev-ui.sh",
     "build:api": "pnpm --dir apps/api build",
-    "dev:worker": "python3 apps/worker/src/worker/main.py",
+    "dev:worker": "uv run --project apps/worker ecolms-worker",
     "dev:transcription": "python3 apps/transcription-service/src/transcription_service/main.py",
     "dev:web": "pnpm --dir apps/web dev",
     "build:web": "pnpm --dir apps/web build",
