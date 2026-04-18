@@ -77,6 +77,7 @@ import {
   HoverCardContent,
   HoverCardTrigger,
 } from "@/components/ui/hover-card"
+import { PromptEditorDialog } from "@/components/prompt-editor-dialog"
 import {
   meetingStageLabels,
   type MeetingArtifactRecord,
@@ -613,6 +614,7 @@ export function MeetingsWorkspaceView({
   const meetingFileInputRef = useRef<HTMLInputElement | null>(null)
   const [alerts, setAlerts] = useState<UiAlert[]>([])
   const [systemHealth, setSystemHealth] = useState<SystemHealthRecord | null>(null)
+  const [promptsOpen, setPromptsOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
   const [meetingTitle, setMeetingTitle] = useState("")
   const [meetingDescription, setMeetingDescription] = useState("")
@@ -856,58 +858,64 @@ export function MeetingsWorkspaceView({
               </Badge>
             </div>
           </div>
-          <HoverCard>
-            <HoverCardTrigger
-              render={
-                <button
-                  type="button"
-                  className={cn(
-                    "inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm",
-                    serviceStatusBadgeClass(overallHealthStatus)
-                  )}
-                />
-              }
-            >
-              {serviceStatusIcon(overallHealthStatus)}
-              <span>Сервисы: {serviceStatusLabel(overallHealthStatus)}</span>
-            </HoverCardTrigger>
-            <HoverCardContent align="end" side="bottom" className="min-w-80 max-w-96 space-y-3">
-              <div className="space-y-1">
-                <div className="text-sm font-semibold">Доступность сервисов</div>
-                <div className="text-xs text-muted-foreground">
-                  Обновлено: {systemHealth ? formatDateTime(systemHealth.timestamp) : "нет данных"}
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={() => setPromptsOpen(true)}>
+              <SquarePenIcon data-icon="inline-start" />
+              Промпты
+            </Button>
+            <HoverCard>
+              <HoverCardTrigger
+                render={
+                  <button
+                    type="button"
+                    className={cn(
+                      "inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm",
+                      serviceStatusBadgeClass(overallHealthStatus)
+                    )}
+                  />
+                }
+              >
+                {serviceStatusIcon(overallHealthStatus)}
+                <span>Сервисы: {serviceStatusLabel(overallHealthStatus)}</span>
+              </HoverCardTrigger>
+              <HoverCardContent align="end" side="bottom" className="min-w-80 max-w-96 space-y-3">
+                <div className="space-y-1">
+                  <div className="text-sm font-semibold">Доступность сервисов</div>
+                  <div className="text-xs text-muted-foreground">
+                    Обновлено: {systemHealth ? formatDateTime(systemHealth.timestamp) : "нет данных"}
+                  </div>
                 </div>
-              </div>
-              <div className="space-y-2">
-                {serviceEntries.map((entry) => {
-                  const state = entry.state
-                  const status = state?.status ?? "unknown"
-                  return (
-                    <div
-                      key={entry.key}
-                      className="flex items-start justify-between gap-3 rounded-md border border-border/70 bg-card px-3 py-2"
-                    >
-                      <div className="min-w-0 space-y-1">
-                        <div className="flex items-center gap-2">
-                          {serviceKindIcon(entry.key)}
-                          <span className="text-sm font-medium">{entry.title}</span>
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                          {state?.details ?? "Нет данных"}
-                        </div>
-                      </div>
-                      <Badge
-                        variant="outline"
-                        className={cn("shrink-0", serviceStatusBadgeClass(status))}
+                <div className="space-y-2">
+                  {serviceEntries.map((entry) => {
+                    const state = entry.state
+                    const status = state?.status ?? "unknown"
+                    return (
+                      <div
+                        key={entry.key}
+                        className="flex items-start justify-between gap-3 rounded-md border border-border/70 bg-card px-3 py-2"
                       >
-                        {serviceStatusLabel(status)}
-                      </Badge>
-                    </div>
-                  )
-                })}
-              </div>
-            </HoverCardContent>
-          </HoverCard>
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex items-center gap-2">
+                            {serviceKindIcon(entry.key)}
+                            <span className="text-sm font-medium">{entry.title}</span>
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {state?.details ?? "Нет данных"}
+                          </div>
+                        </div>
+                        <Badge
+                          variant="outline"
+                          className={cn("shrink-0", serviceStatusBadgeClass(status))}
+                        >
+                          {serviceStatusLabel(status)}
+                        </Badge>
+                      </div>
+                    )
+                  })}
+                </div>
+              </HoverCardContent>
+            </HoverCard>
+          </div>
         </div>
 
         <section className="grid flex-1 gap-3 lg:grid-cols-[340px_minmax(0,1fr)]">
@@ -1289,6 +1297,11 @@ export function MeetingsWorkspaceView({
           router.replace(`/meetings?${params.toString()}`)
           router.refresh()
         }}
+      />
+      <PromptEditorDialog
+        open={promptsOpen}
+        onOpenChange={setPromptsOpen}
+        preferredModule="meetings"
       />
       <div className="pointer-events-none fixed bottom-4 right-4 z-[70] flex w-[min(92vw,420px)] flex-col items-end gap-2">
         {alerts.map((item) => (
