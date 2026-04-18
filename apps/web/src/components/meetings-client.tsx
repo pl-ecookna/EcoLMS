@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { useMemo, useState } from "react"
 import {
   ArrowLeftIcon,
@@ -9,14 +10,17 @@ import {
   DownloadIcon,
   FileTextIcon,
   Loader2Icon,
+  InfoIcon,
   RefreshCwIcon,
   SaveIcon,
   ScrollTextIcon,
   SparklesIcon,
   SquarePenIcon,
+  MoreHorizontalIcon,
   UsersIcon,
   VideoIcon,
   WandSparklesIcon,
+  Trash2Icon,
   XCircleIcon,
 } from "lucide-react"
 import ReactMarkdown from "react-markdown"
@@ -49,6 +53,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
   meetingStageLabels,
   type MeetingArtifactRecord,
   type MeetingDetailRecord,
@@ -58,6 +68,7 @@ import {
   type MeetingStageId,
   type MeetingStatus,
   type PaginatedMeetings,
+  deleteMeeting,
   updateMeetingSpeaker,
 } from "@/lib/ecolms-api"
 
@@ -380,6 +391,7 @@ export function MeetingsWorkspaceView({
   selectedMeetingId: string | null
   selectedMeeting: MeetingDetailRecord | null
 }) {
+  const router = useRouter()
   const stats = useMemo(() => {
     const items = pageData.items
     const completed = items.filter((item) => item.status === "completed").length
@@ -391,6 +403,13 @@ export function MeetingsWorkspaceView({
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(59,130,246,0.10),_transparent_32%),radial-gradient(circle_at_top_right,_rgba(16,185,129,0.10),_transparent_28%),linear-gradient(to_bottom,_var(--background),_var(--background))]">
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
+        <div className="flex items-center justify-between gap-3">
+          <Button variant="ghost" nativeButton={false} render={<Link href="/" />}>
+            <ArrowLeftIcon data-icon="inline-start" />
+            К интерфейсу LMS
+          </Button>
+        </div>
+
         <section className="overflow-hidden rounded-3xl border bg-card/80 shadow-sm backdrop-blur">
           <div className="flex flex-col gap-6 p-6 lg:flex-row lg:items-end lg:justify-between">
             <div className="max-w-3xl">
@@ -456,18 +475,20 @@ export function MeetingsWorkspaceView({
                     {pageData.items.map((meeting) => {
                       const isSelected = meeting.id === selectedMeetingId
                       return (
-                        <Link
+                        <div
                           key={meeting.id}
-                          href={`/meetings?page=${currentPage}&meeting=${meeting.id}`}
                           className={cn(
-                            "block rounded-2xl border p-4 transition-colors hover:bg-muted/35",
+                            "rounded-2xl border p-4 transition-colors hover:bg-muted/35",
                             isSelected
                               ? "border-primary/40 bg-muted/40 shadow-sm"
                               : "border-border/70 bg-card"
                           )}
                         >
                           <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0 space-y-2">
+                            <Link
+                              href={`/meetings?page=${currentPage}&meeting=${meeting.id}`}
+                              className="min-w-0 flex-1 space-y-2 text-left"
+                            >
                               <div className="truncate text-base font-semibold">
                                 {meeting.title}
                               </div>
@@ -477,8 +498,70 @@ export function MeetingsWorkspaceView({
                               <div className="text-xs text-muted-foreground">
                                 {meeting.id}
                               </div>
+                            </Link>
+                            <div className="flex items-start gap-2">
+                              <StatusBadge status={meeting.status} />
+                              <DropdownMenu>
+                                <DropdownMenuTrigger
+                                  className={cn(
+                                    "inline-flex h-8 w-8 items-center justify-center rounded-md border border-border/70 bg-background text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                                  )}
+                                  onClick={(event) => event.stopPropagation()}
+                                >
+                                  <span className="sr-only">Действия встречи</span>
+                                  <MoreHorizontalIcon className="size-4" />
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="min-w-56">
+                                  <DropdownMenuItem
+                                    onClick={() => router.push(`/meetings/${meeting.id}`)}
+                                    className="items-start gap-3 py-2"
+                                  >
+                                    <InfoIcon className="mt-0.5 size-4" />
+                                    <div className="space-y-0.5">
+                                      <div className="font-medium">Информация</div>
+                                      <div className="text-xs text-muted-foreground">
+                                        Открыть детальную страницу встречи.
+                                      </div>
+                                    </div>
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    variant="destructive"
+                                    onClick={() => {
+                                      const confirmed = window.confirm(
+                                        "Удалить встречу и все связанные материалы?"
+                                      )
+                                      if (!confirmed) {
+                                        return
+                                      }
+
+                                      void (async () => {
+                                        await deleteMeeting(meeting.id)
+                                        const nextMeetingId =
+                                          selectedMeetingId === meeting.id
+                                            ? pageData.items.find(
+                                                (item) => item.id !== meeting.id
+                                              )?.id ?? null
+                                            : selectedMeetingId
+                                        const nextUrl = `/meetings?page=${currentPage}${
+                                          nextMeetingId ? `&meeting=${nextMeetingId}` : ""
+                                        }`
+                                        router.replace(nextUrl)
+                                        router.refresh()
+                                      })()
+                                    }}
+                                    className="items-start gap-3 py-2"
+                                  >
+                                    <Trash2Icon className="mt-0.5 size-4" />
+                                    <div className="space-y-0.5">
+                                      <div className="font-medium">Удалить</div>
+                                      <div className="text-xs text-muted-foreground">
+                                        Удалить встречу и все её материалы.
+                                      </div>
+                                    </div>
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
                             </div>
-                            <StatusBadge status={meeting.status} />
                           </div>
                           <div className="mt-3 flex flex-wrap gap-2">
                             <Badge variant="outline">{meeting.speakersCount} спик.</Badge>
@@ -489,7 +572,7 @@ export function MeetingsWorkspaceView({
                           <div className="mt-3 text-xs text-muted-foreground">
                             {formatDateTime(meeting.updatedAt)}
                           </div>
-                        </Link>
+                        </div>
                       )
                     })}
                   </div>

@@ -501,6 +501,12 @@ export async function getMeeting(meetingId: string) {
   return requestJson<MeetingDetailRecord>(`/api/meetings/${meetingId}`)
 }
 
+export async function deleteMeeting(meetingId: string) {
+  return requestJson<{ id: string; deleted: true }>(`/api/meetings/${meetingId}`, {
+    method: "DELETE",
+  })
+}
+
 export async function getMeetingTranscript(meetingId: string) {
   return requestJson<{
     meetingId: string
