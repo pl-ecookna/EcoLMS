@@ -46,6 +46,8 @@
 Рекомендуемый путь для Sber TLS: `SALUTESPEECH_CA_CERT_PATH=certs/russiantrustedca.pem`.
 Для dev-среды при проблемах с TLS-цепочкой можно временно включить `SALUTESPEECH_SSL_NO_VERIFY=true`.
 Для LLM-вызовов (`OpenAI`/`OpenRouter`) worker использует trust store из `certifi`.
+Prompt templates для `lms` и `meetings` worker читает из таблицы `llm_prompts` в PostgreSQL.
+Если запись в таблице отсутствует, worker дозаписывает дефолтный prompt из кода и использует его как seed.
 
 Текущий формат подготовки аудио для `SaluteSpeech` в V1:
 

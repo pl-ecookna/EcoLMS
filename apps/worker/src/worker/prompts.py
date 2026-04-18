@@ -5,16 +5,23 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class PromptDefinition:
+    module: str
     key: str
     title: str
-    text: str
+    system_prompt: str
+    user_prompt_template: str = ""
+
+    @property
+    def text(self) -> str:
+        return self.system_prompt
 
 
-PROMPTS: dict[str, PromptDefinition] = {
+LMS_PROMPTS: dict[str, PromptDefinition] = {
     "analize_video": PromptDefinition(
+        module="lms",
         key="analize_video",
         title="Извлечение полезного контента из видео",
-        text="""Ты — специалист по извлечению и структурированию технического контента из видеофайлов.
+        system_prompt="""Ты — специалист по извлечению и структурированию технического контента из видеофайлов.
 
 Задача:
 1. Выделить практически полезную информацию для создания обучающих материалов, исключив вспомогательную и общую информацию.
@@ -41,11 +48,16 @@ PROMPTS: dict[str, PromptDefinition] = {
 - юридические и маркетинговые блоки.
 
 Формат вывода: JSON, где `summary` — одна строка без временных меток, а `transcript` — полный необработанный текст видео.""",
+        user_prompt_template=(
+            "Проанализируй {source_type} и верни только JSON с полями summary и transcript. "
+            "Поле transcript должно содержать очищенный исходный текст без выдуманных данных."
+        ),
     ),
     "analize_doc": PromptDefinition(
+        module="lms",
         key="analize_doc",
         title="Извлечение полезного контента из документов",
-        text="""Ты — специалист по извлечению и структурированию технического контента из презентаций и текстовых материалов.
+        system_prompt="""Ты — специалист по извлечению и структурированию технического контента из презентаций и текстовых материалов.
 
 Задача:
 1. Выделить практически полезную информацию для создания обучающих материалов.
@@ -68,11 +80,16 @@ PROMPTS: dict[str, PromptDefinition] = {
 - юридическую и маркетинговую информацию.
 
 Сохраняй оригинальную терминологию, численные значения и только факты, относящиеся к теме обучения.""",
+        user_prompt_template=(
+            "Проанализируй {source_type} и верни только JSON с полями summary и transcript. "
+            "Поле transcript должно содержать очищенный исходный текст без выдуманных данных."
+        ),
     ),
     "generate_plan": PromptDefinition(
+        module="lms",
         key="generate_plan",
         title="Генерация структуры курса",
-        text="""Ты — методист корпоративного учебного центра.
+        system_prompt="""Ты — методист корпоративного учебного центра.
 
 Задача — создать структуру обучающего курса только на основе предоставленных материалов.
 
@@ -90,11 +107,16 @@ PROMPTS: dict[str, PromptDefinition] = {
 - список разделов с кратким описанием;
 - практический результат по каждому разделу;
 - ключевые навыки после обучения.""",
+        user_prompt_template=(
+            "Сгенерируй итоговый markdown для этапа курса. "
+            "Используй только данные из sourceText, без выдуманных деталей."
+        ),
     ),
     "generate_materials": PromptDefinition(
+        module="lms",
         key="generate_materials",
         title="Генерация учебных материалов",
-        text="""Ты — методолог профессионального обучения, создающий онлайн-курсы для технической аудитории.
+        system_prompt="""Ты — методолог профессионального обучения, создающий онлайн-курсы для технической аудитории.
 
 Задача — разработать подробные учебные материалы на основе исходного текста (структурированного источника) и утверждённого плана.
 
@@ -116,11 +138,16 @@ PROMPTS: dict[str, PromptDefinition] = {
 - справочная информация.
 
 Материал должен быть практичным, структурированным и удобным для изучения.""",
+        user_prompt_template=(
+            "Сгенерируй итоговый markdown для этапа курса. "
+            "Используй только данные из sourceText, без выдуманных деталей."
+        ),
     ),
     "generate_test": PromptDefinition(
+        module="lms",
         key="generate_test",
         title="Генерация проверочного теста",
-        text="""Ты — методолог профессионального образования.
+        system_prompt="""Ты — методолог профессионального образования.
 
 Составь проверочный тест по обучающим материалам с опорой на исходный текст.
 
@@ -140,9 +167,67 @@ PROMPTS: dict[str, PromptDefinition] = {
 - если данных недостаточно, вопрос не придумывать.
 
 Формат ответа: пронумерованный список вопросов с вариантами ответа.""",
+        user_prompt_template=(
+            "Сгенерируй итоговый markdown для этапа курса. "
+            "Используй только данные из sourceText, без выдуманных деталей."
+        ),
     ),
 }
 
+MEETING_PROMPTS: dict[str, PromptDefinition] = {
+    "meeting_summary": PromptDefinition(
+        module="meetings",
+        key="meeting_summary",
+        title="Краткая сводка встречи",
+        system_prompt=(
+            "Ты анализируешь русскоязычные встречи. "
+            "Используй только факты из transcript. "
+            "Не придумывай имена, сроки, решения и поручения, которых нет в тексте."
+        ),
+        user_prompt_template=(
+            "Сформируй краткое summary встречи на русском языке. "
+            "Верни только JSON с полями markdown и shortSummary. "
+            "Используй только данные из transcript, ничего не выдумывай."
+        ),
+    ),
+    "meeting_protocol": PromptDefinition(
+        module="meetings",
+        key="meeting_protocol",
+        title="Протокол встречи",
+        system_prompt=(
+            "Ты анализируешь русскоязычные встречи. "
+            "Используй только факты из transcript. "
+            "Не придумывай имена, сроки, решения и поручения, которых нет в тексте."
+        ),
+        user_prompt_template=(
+            "Сформируй протокол встречи на русском языке. "
+            "Верни только JSON с полями markdown и shortSummary. "
+            "Используй только данные из transcript, ничего не выдумывай."
+        ),
+    ),
+    "meeting_actions": PromptDefinition(
+        module="meetings",
+        key="meeting_actions",
+        title="Поручения и решения по встрече",
+        system_prompt=(
+            "Ты анализируешь русскоязычные встречи. "
+            "Используй только факты из transcript. "
+            "Не придумывай имена, сроки, решения и поручения, которых нет в тексте."
+        ),
+        user_prompt_template=(
+            "Сформируй структурированные результаты встречи на русском языке. "
+            "Верни только JSON с полями markdown, shortSummary, decisions, actionItems, openQuestions. "
+            "Для actionItems указывай assignee и deadline только если они явно прозвучали. "
+            "Для actionItems по возможности указывай sourceSegmentIds как массив segment_id из transcript."
+        ),
+    ),
+}
+
+PROMPTS: dict[str, PromptDefinition] = LMS_PROMPTS
+DEFAULT_PROMPTS: dict[tuple[str, str], PromptDefinition] = {
+    **{(prompt.module, prompt.key): prompt for prompt in LMS_PROMPTS.values()},
+    **{(prompt.module, prompt.key): prompt for prompt in MEETING_PROMPTS.values()},
+}
 
 STAGE_PROMPT_MAP = {
     "source_compiled": ("analize_video", "analize_doc"),
@@ -153,4 +238,4 @@ STAGE_PROMPT_MAP = {
 
 
 def prompt_bundle_for_stage(stage: str) -> list[PromptDefinition]:
-    return [PROMPTS[key] for key in STAGE_PROMPT_MAP.get(stage, ())]
+    return [LMS_PROMPTS[key] for key in STAGE_PROMPT_MAP.get(stage, ())]

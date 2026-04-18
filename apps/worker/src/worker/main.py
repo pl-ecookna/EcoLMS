@@ -26,7 +26,7 @@ from pypdf import PdfReader
 from psycopg.rows import dict_row
 from striprtf.striprtf import rtf_to_text
 
-from worker.prompts import prompt_bundle_for_stage, PROMPTS
+from worker.prompts import DEFAULT_PROMPTS, PromptDefinition, prompt_bundle_for_stage
 
 
 @dataclass(slots=True)
@@ -410,6 +410,77 @@ def resolve_llm_provider(config: WorkerConfig) -> str:
     return primary
 
 
+def ensure_prompt_storage(conn: psycopg.Connection) -> None:
+    conn.execute(
+        """
+        create table if not exists llm_prompts (
+          module text not null check (module in ('lms', 'meetings')),
+          prompt_key text not null,
+          title text not null,
+          system_prompt text not null,
+          user_prompt_template text not null default '',
+          created_at timestamptz not null default now(),
+          updated_at timestamptz not null default now(),
+          primary key (module, prompt_key)
+        )
+        """
+    )
+    conn.execute(
+        """
+        create index if not exists llm_prompts_module_idx
+          on llm_prompts (module, prompt_key)
+        """
+    )
+
+    for prompt in DEFAULT_PROMPTS.values():
+        conn.execute(
+            """
+            insert into llm_prompts (
+              module, prompt_key, title, system_prompt, user_prompt_template, created_at, updated_at
+            ) values (
+              %s, %s, %s, %s, %s, now(), now()
+            )
+            on conflict (module, prompt_key) do nothing
+            """,
+            (
+                prompt.module,
+                prompt.key,
+                prompt.title,
+                prompt.system_prompt,
+                prompt.user_prompt_template,
+            ),
+        )
+
+
+def load_prompt_definition(
+    conn: psycopg.Connection,
+    module: str,
+    prompt_key: str,
+) -> PromptDefinition:
+    ensure_prompt_storage(conn)
+    row = conn.execute(
+        """
+        select module, prompt_key, title, system_prompt, user_prompt_template
+        from llm_prompts
+        where module = %s and prompt_key = %s
+        limit 1
+        """,
+        (module, prompt_key),
+    ).fetchone()
+    if row is None:
+        default_prompt = DEFAULT_PROMPTS.get((module, prompt_key))
+        if default_prompt is None:
+            raise RuntimeError(f"Неизвестный prompt: {module}:{prompt_key}")
+        return default_prompt
+    return PromptDefinition(
+        module=str(row["module"]),
+        key=str(row["prompt_key"]),
+        title=str(row["title"]),
+        system_prompt=str(row["system_prompt"]),
+        user_prompt_template=str(row["user_prompt_template"] or ""),
+    )
+
+
 def normalize_provider_error(provider: str, raw_error: str) -> str:
     normalized = raw_error.lower()
     billing_patterns = [
@@ -552,24 +623,20 @@ def openrouter_chat_completion(
 
 
 def analyze_source_with_llm(
+    conn: psycopg.Connection,
     config: WorkerConfig,
     source_text: str,
     *,
     prompt_key: str = "analize_video",
     source_type: str = "видео",
 ) -> dict[str, Any]:
-    prompt_definition = PROMPTS.get(prompt_key)
-    if prompt_definition is None:
-        raise RuntimeError(f"Неизвестный prompt key: {prompt_key}")
-    prompt = prompt_definition.text
+    prompt_definition = load_prompt_definition(conn, "lms", prompt_key)
+    prompt = prompt_definition.system_prompt
     if not source_text.strip():
         raise RuntimeError("Невозможно вызвать LLM: исходный текст пуст.")
 
     user_payload = {
-        "task": (
-            f"Проанализируй {source_type} и верни только JSON с полями summary и transcript. "
-            "Поле transcript должно содержать очищенный исходный текст без выдуманных данных."
-        ),
+        "task": prompt_definition.user_prompt_template.replace("{source_type}", source_type),
         "sourceText": source_text,
     }
     messages = [
@@ -613,6 +680,9 @@ def analyze_source_with_llm(
             "provider": provider,
             "model": model_name,
             "attempts": [{"provider": provider, "ok": True}],
+            "promptModule": prompt_definition.module,
+            "promptKey": prompt_definition.key,
+            "promptTitle": prompt_definition.title,
         }
     except Exception as exc:
         raise RuntimeError(f"LLM-провайдер {provider} завершился ошибкой: {exc}") from exc
@@ -646,6 +716,7 @@ def build_stage_generation_input(
 
 
 def generate_stage_markdown_with_llm(
+    conn: psycopg.Connection,
     config: WorkerConfig,
     *,
     stage: str,
@@ -656,16 +727,14 @@ def generate_stage_markdown_with_llm(
     prompt_key = next((key for key in prompt_keys if key.startswith("generate_")), None)
     if not prompt_key:
         raise RuntimeError(f"Для этапа {stage} не найден prompt генерации.")
-    prompt = PROMPTS[prompt_key].text
+    prompt_definition = load_prompt_definition(conn, "lms", prompt_key)
+    prompt = prompt_definition.system_prompt
     normalized_source = source_text.strip()
     if not normalized_source:
         raise RuntimeError(f"Невозможно вызвать LLM для {stage}: пустой источник.")
 
     user_payload = {
-        "task": (
-            "Сгенерируй итоговый markdown для этапа курса. "
-            "Используй только данные из sourceText, без выдуманных деталей."
-        ),
+        "task": prompt_definition.user_prompt_template,
         "projectName": project_name,
         "stage": stage,
         "sourceText": normalized_source[:180000],
@@ -706,19 +775,26 @@ def generate_stage_markdown_with_llm(
             "provider": provider,
             "model": model_name,
             "attempts": [{"provider": provider, "ok": True}],
+            "promptModule": prompt_definition.module,
             "sourceTextLength": len(normalized_source),
             "promptKey": prompt_key,
+            "promptTitle": prompt_definition.title,
         }
     except Exception as exc:
         raise RuntimeError(f"LLM-провайдер {provider} завершился ошибкой: {exc}") from exc
 
 
-def stage_prompt_metadata(stage: str) -> dict[str, Any]:
-    prompts = prompt_bundle_for_stage(stage)
+def stage_prompt_metadata(conn: psycopg.Connection, stage: str) -> dict[str, Any]:
+    prompts = [
+        load_prompt_definition(conn, "lms", prompt.key)
+        for prompt in prompt_bundle_for_stage(stage)
+    ]
     return {
+        "promptModules": [item.module for item in prompts],
         "promptKeys": [item.key for item in prompts],
         "promptTitles": [item.title for item in prompts],
-        "promptTexts": [item.text for item in prompts],
+        "promptTexts": [item.system_prompt for item in prompts],
+        "promptUserTemplates": [item.user_prompt_template for item in prompts],
     }
 
 
@@ -1616,6 +1692,7 @@ def build_meeting_llm_transcript_input(segments: list[dict[str, Any]]) -> str:
 
 
 def generate_meeting_markdown_with_llm(
+    conn: psycopg.Connection,
     config: WorkerConfig,
     *,
     stage: str,
@@ -1624,41 +1701,18 @@ def generate_meeting_markdown_with_llm(
 ) -> dict[str, Any]:
     if not transcript_input.strip():
         raise RuntimeError(f"Невозможно вызвать LLM для {stage}: пустой transcript.")
-
-    if stage == "meeting_summary":
-        task = (
-            "Сформируй краткое summary встречи на русском языке. "
-            "Верни только JSON с полями markdown и shortSummary. "
-            "Используй только данные из transcript, ничего не выдумывай."
-        )
-    elif stage == "meeting_protocol":
-        task = (
-            "Сформируй протокол встречи на русском языке. "
-            "Верни только JSON с полями markdown и shortSummary. "
-            "Используй только данные из transcript, ничего не выдумывай."
-        )
-    else:
-        task = (
-            "Сформируй структурированные результаты встречи на русском языке. "
-            "Верни только JSON с полями markdown, shortSummary, decisions, actionItems, openQuestions. "
-            "Для actionItems указывай assignee и deadline только если они явно прозвучали. "
-            "Для actionItems по возможности указывай sourceSegmentIds как массив segment_id из transcript."
-        )
+    prompt_definition = load_prompt_definition(conn, "meetings", stage)
 
     user_payload = {
         "meetingTitle": meeting_title,
         "stage": stage,
-        "task": task,
+        "task": prompt_definition.user_prompt_template,
         "transcript": transcript_input[:180000],
     }
     messages = [
         {
             "role": "system",
-            "content": (
-                "Ты анализируешь русскоязычные встречи. "
-                "Используй только факты из transcript. "
-                "Не придумывай имена, сроки, решения и поручения, которых нет в тексте."
-            ),
+            "content": prompt_definition.system_prompt,
         },
         {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
     ]
@@ -1693,6 +1747,9 @@ def generate_meeting_markdown_with_llm(
             "provider": provider,
             "model": model_name,
             "attempts": [{"provider": provider, "ok": True}],
+            "promptModule": prompt_definition.module,
+            "promptKey": prompt_definition.key,
+            "promptTitle": prompt_definition.title,
         }
     except Exception as exc:
         raise RuntimeError(f"LLM-провайдер {provider} завершился ошибкой: {exc}") from exc
@@ -2262,6 +2319,7 @@ def handle_meeting_generation_stage(
 
     transcript_input = build_meeting_llm_transcript_input(normalized_segments)
     llm_result = generate_meeting_markdown_with_llm(
+        conn,
         config,
         stage=stage,
         meeting_title=str(meeting["title"]),
@@ -2280,6 +2338,9 @@ def handle_meeting_generation_stage(
     ensure_meeting_artifact(conn, meeting["id"], stage, markdown, content_json)
     return {
         "llm": {
+            "promptModule": llm_result.get("promptModule"),
+            "promptKey": llm_result.get("promptKey"),
+            "promptTitle": llm_result.get("promptTitle"),
             "provider": llm_result.get("provider"),
             "model": llm_result.get("model"),
             "attempts": llm_result.get("attempts"),
@@ -2546,6 +2607,7 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
                 transcription_data = call_transcription_service(config, source_file)
                 transcript_text = str(transcription_data.get("text") or "").strip()
                 llm_data = analyze_source_with_llm(
+                    conn,
                     config,
                     transcript_text,
                     prompt_key="analize_video",
@@ -2604,6 +2666,7 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
                 if merged_document_parts:
                     merged_document_text = "\n\n---\n\n".join(merged_document_parts)[:180000]
                     llm_document_data = analyze_source_with_llm(
+                        conn,
                         config,
                         merged_document_text,
                         prompt_key="analize_doc",
@@ -2611,6 +2674,9 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
                     )
                     llm_documents.append(
                         {
+                            "promptModule": llm_document_data.get("promptModule"),
+                            "promptKey": llm_document_data.get("promptKey"),
+                            "promptTitle": llm_document_data.get("promptTitle"),
                             "provider": llm_document_data.get("provider"),
                             "model": llm_document_data.get("model"),
                             "attempts": llm_document_data.get("attempts"),
@@ -2645,6 +2711,7 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
             )
             if source_for_stage.strip():
                 llm_stage_data = generate_stage_markdown_with_llm(
+                    conn,
                     config,
                     stage=job["stage"],
                     source_text=source_for_stage,
@@ -2663,7 +2730,7 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
         payload = job.get("payload_json") or {}
         if isinstance(payload, str):
             payload = json.loads(payload)
-        prompt_metadata = stage_prompt_metadata(job["stage"])
+        prompt_metadata = stage_prompt_metadata(conn, job["stage"])
         stage_metadata = dict(prompt_metadata)
         if transcription_data is not None and source_file is not None:
             stage_metadata["transcription"] = {
@@ -2678,6 +2745,9 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
             }
         if llm_data is not None:
             stage_metadata["llm"] = {
+                "promptModule": llm_data.get("promptModule"),
+                "promptKey": llm_data.get("promptKey"),
+                "promptTitle": llm_data.get("promptTitle"),
                 "provider": llm_data.get("provider"),
                 "model": llm_data.get("model"),
                 "attempts": llm_data.get("attempts"),
@@ -2688,10 +2758,12 @@ def process_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
             stage_metadata["llmDocuments"] = llm_documents
         if llm_stage_data is not None:
             stage_metadata["llmStageGeneration"] = {
+                "promptModule": llm_stage_data.get("promptModule"),
                 "provider": llm_stage_data.get("provider"),
                 "model": llm_stage_data.get("model"),
                 "attempts": llm_stage_data.get("attempts"),
                 "promptKey": llm_stage_data.get("promptKey"),
+                "promptTitle": llm_stage_data.get("promptTitle"),
                 "sourceTextLength": llm_stage_data.get("sourceTextLength"),
                 "inputStages": llm_stage_input_stages,
                 "markdownLength": len(str(llm_stage_data.get("markdown") or "")),

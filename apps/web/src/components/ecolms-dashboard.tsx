@@ -89,14 +89,18 @@ import {
   getProject,
   getSystemHealth,
   initUpload,
+  listPrompts,
   listProjects,
   projectStatusLabels,
+  type PromptModule,
+  type PromptRecord,
   type ServiceHealthState,
   type ServiceHealthStatus,
   type SystemHealthRecord,
   signUploadPart,
   stageLabels,
   updateArtifact,
+  updatePrompt,
   updateProject,
   type ProjectDetailRecord,
   type ProjectRecord,
@@ -155,6 +159,12 @@ type UiAlert = {
   type: UiAlertType
   title: string
   description?: string
+}
+
+type PromptDraft = {
+  title: string
+  systemPrompt: string
+  userPromptTemplate: string
 }
 
 function projectStatusBadgeVariant(
@@ -369,6 +379,10 @@ function MarkdownContent({ value }: { value: string }) {
   )
 }
 
+function promptGroupLabel(module: PromptModule) {
+  return module === "lms" ? "LMS" : "Meetings"
+}
+
 export function EcolmsDashboard() {
   const [projects, setProjects] = useState<ProjectRecord[]>([])
   const [projectTotal, setProjectTotal] = useState(0)
@@ -405,12 +419,33 @@ export function EcolmsDashboard() {
   const [sourcePreviewError, setSourcePreviewError] = useState<string | null>(null)
   const [sourcePreviewProjectName, setSourcePreviewProjectName] = useState("")
   const [sourcePreviewContent, setSourcePreviewContent] = useState("")
+  const [promptsOpen, setPromptsOpen] = useState(false)
+  const [promptsLoading, setPromptsLoading] = useState(false)
+  const [promptsError, setPromptsError] = useState<string | null>(null)
+  const [prompts, setPrompts] = useState<PromptRecord[]>([])
+  const [selectedPromptKey, setSelectedPromptKey] = useState<string | null>(null)
+  const [promptDraft, setPromptDraft] = useState<PromptDraft>({
+    title: "",
+    systemPrompt: "",
+    userPromptTemplate: "",
+  })
+  const [savingPrompt, setSavingPrompt] = useState(false)
   const [alerts, setAlerts] = useState<UiAlert[]>([])
 
   const totalPages = Math.max(1, Math.ceil(projectTotal / PAGE_SIZE))
   const currentStageArtifact = getStageArtifact(selectedProject, selectedStage)
   const currentStageSourceValue = getStageMarkdown(selectedProject, selectedStage)
   const hasUnsavedChanges = Boolean(currentStageArtifact) && editorValue !== currentStageSourceValue
+  const selectedPrompt = prompts.find(
+    (prompt) => `${prompt.module}:${prompt.promptKey}` === selectedPromptKey
+  )
+  const promptGroups = prompts.reduce<Record<PromptModule, PromptRecord[]>>(
+    (accumulator, prompt) => {
+      accumulator[prompt.module] = [...(accumulator[prompt.module] ?? []), prompt]
+      return accumulator
+    },
+    { lms: [], meetings: [] }
+  )
 
   function dismissAlert(id: string) {
     setAlerts((current) => current.filter((item) => item.id !== id))
@@ -422,6 +457,42 @@ export function EcolmsDashboard() {
     window.setTimeout(() => {
       dismissAlert(id)
     }, 5000)
+  }
+
+  function selectPrompt(prompt: PromptRecord) {
+    setSelectedPromptKey(`${prompt.module}:${prompt.promptKey}`)
+    setPromptDraft({
+      title: prompt.title,
+      systemPrompt: prompt.systemPrompt,
+      userPromptTemplate: prompt.userPromptTemplate,
+    })
+  }
+
+  async function refreshPrompts() {
+    setPromptsLoading(true)
+    setPromptsError(null)
+    try {
+      const response = await listPrompts()
+      setPrompts(response)
+      const preferred =
+        response.find((prompt) => `${prompt.module}:${prompt.promptKey}` === selectedPromptKey) ??
+        response[0] ??
+        null
+      if (preferred) {
+        selectPrompt(preferred)
+      } else {
+        setSelectedPromptKey(null)
+        setPromptDraft({
+          title: "",
+          systemPrompt: "",
+          userPromptTemplate: "",
+        })
+      }
+    } catch (error) {
+      setPromptsError(error instanceof Error ? error.message : "Не удалось загрузить промпты")
+    } finally {
+      setPromptsLoading(false)
+    }
   }
 
   async function refreshProjects(nextPage = page) {
@@ -522,6 +593,14 @@ export function EcolmsDashboard() {
     }
     setRegenerationContext(selectedProject.sourceSummary || "")
   }, [selectedProject])
+
+  useEffect(() => {
+    if (!promptsOpen) {
+      return
+    }
+    void refreshPrompts()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [promptsOpen])
 
   useEffect(() => {
     if (!selectedProject) {
@@ -894,6 +973,41 @@ export function EcolmsDashboard() {
     }
   }
 
+  async function handleSavePrompt() {
+    if (!selectedPrompt) {
+      return
+    }
+
+    if (!promptDraft.title.trim() || !promptDraft.systemPrompt.trim() || !promptDraft.userPromptTemplate.trim()) {
+      notify("error", "Промпт не сохранён", "Все поля промпта должны быть заполнены.")
+      return
+    }
+
+    setSavingPrompt(true)
+    try {
+      const updated = await updatePrompt(selectedPrompt.module, selectedPrompt.promptKey, {
+        title: promptDraft.title,
+        systemPrompt: promptDraft.systemPrompt,
+        userPromptTemplate: promptDraft.userPromptTemplate,
+      })
+      setPrompts((current) =>
+        current.map((item) =>
+          item.module === updated.module && item.promptKey === updated.promptKey ? updated : item
+        )
+      )
+      selectPrompt(updated)
+      notify("success", "Промпт сохранён", `Обновлён ${updated.promptKey}.`)
+    } catch (error) {
+      notify(
+        "error",
+        "Промпт не сохранён",
+        error instanceof Error ? error.message : "Не удалось сохранить промпт"
+      )
+    } finally {
+      setSavingPrompt(false)
+    }
+  }
+
   async function handleGenerateAllForProject(projectId: string) {
     if (!confirmDiscardUnsavedChanges()) {
       return
@@ -1173,9 +1287,15 @@ export function EcolmsDashboard() {
                 </div>
               </HoverCardContent>
             </HoverCard>
-            <Link href="/meetings" className={buttonVariants({ variant: "outline", size: "sm" })}>
-              Модуль встреч
-            </Link>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => setPromptsOpen(true)}>
+                <PencilIcon data-icon="inline-start" />
+                Промпты
+              </Button>
+              <Link href="/meetings" className={buttonVariants({ variant: "outline", size: "sm" })}>
+                Модуль встреч
+              </Link>
+            </div>
           </header>
 
           {listError ? (
@@ -1958,6 +2078,164 @@ export function EcolmsDashboard() {
           <SheetFooter className="border-t">
             <Button variant="outline" onClick={() => setSourcePreviewOpen(false)}>
               Закрыть
+            </Button>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
+
+      <Sheet open={promptsOpen} onOpenChange={setPromptsOpen}>
+        <SheetContent className="flex h-full w-full flex-col gap-0 sm:max-w-[1180px]">
+          <SheetHeader className="border-b">
+            <SheetTitle>Редактирование промптов</SheetTitle>
+            <SheetDescription>
+              Промпты для `lms` и `meetings` хранятся в базе данных и применяются worker-ом без деплоя.
+            </SheetDescription>
+          </SheetHeader>
+          <div className="grid min-h-0 flex-1 grid-cols-[320px_minmax(0,1fr)]">
+            <div className="border-r">
+              <ScrollArea className="h-full">
+                <div className="flex flex-col gap-4 p-4">
+                  {promptsLoading ? (
+                    Array.from({ length: 6 }).map((_, index) => (
+                      <Skeleton key={index} className="h-16 w-full" />
+                    ))
+                  ) : promptsError ? (
+                    <Alert variant="destructive">
+                      <AlertCircleIcon />
+                      <AlertTitle>Не удалось загрузить промпты</AlertTitle>
+                      <AlertDescription>{promptsError}</AlertDescription>
+                    </Alert>
+                  ) : (
+                    (["lms", "meetings"] as const).map((module) =>
+                      promptGroups[module].length ? (
+                        <div key={module} className="flex flex-col gap-2">
+                          <div className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                            {promptGroupLabel(module)}
+                          </div>
+                          <div className="flex flex-col gap-2">
+                            {promptGroups[module].map((prompt) => {
+                              const isActive =
+                                `${prompt.module}:${prompt.promptKey}` === selectedPromptKey
+                              return (
+                                <button
+                                  key={`${prompt.module}:${prompt.promptKey}`}
+                                  type="button"
+                                  className={cn(
+                                    "rounded-lg border px-3 py-2 text-left transition-colors hover:bg-muted/35",
+                                    isActive
+                                      ? "border-primary/35 bg-muted/30"
+                                      : "border-border/70 bg-card"
+                                  )}
+                                  onClick={() => selectPrompt(prompt)}
+                                >
+                                  <div className="truncate text-sm font-medium">{prompt.title}</div>
+                                  <div className="mt-1 text-xs text-muted-foreground">
+                                    {prompt.promptKey}
+                                  </div>
+                                </button>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      ) : null
+                    )
+                  )}
+                </div>
+              </ScrollArea>
+            </div>
+            <div className="min-h-0">
+              <ScrollArea className="h-full">
+                <div className="flex flex-col gap-4 p-4">
+                  {selectedPrompt ? (
+                    <>
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-lg font-semibold">{selectedPrompt.title}</div>
+                          <div className="text-sm text-muted-foreground">
+                            {promptGroupLabel(selectedPrompt.module)} / {selectedPrompt.promptKey}
+                          </div>
+                        </div>
+                        <Badge variant="outline">
+                          Обновлён {formatDateLabel(selectedPrompt.updatedAt)}
+                        </Badge>
+                      </div>
+
+                      <div className="flex flex-col gap-2">
+                        <Label htmlFor="prompt-title">Название</Label>
+                        <Input
+                          id="prompt-title"
+                          value={promptDraft.title}
+                          onChange={(event) =>
+                            setPromptDraft((current) => ({
+                              ...current,
+                              title: event.target.value,
+                            }))
+                          }
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-2">
+                        <Label htmlFor="prompt-system">System prompt</Label>
+                        <Textarea
+                          id="prompt-system"
+                          value={promptDraft.systemPrompt}
+                          onChange={(event) =>
+                            setPromptDraft((current) => ({
+                              ...current,
+                              systemPrompt: event.target.value,
+                            }))
+                          }
+                          className="min-h-[260px] font-mono text-xs leading-6"
+                        />
+                      </div>
+
+                      <div className="flex flex-col gap-2">
+                        <Label htmlFor="prompt-user">User prompt template</Label>
+                        <Textarea
+                          id="prompt-user"
+                          value={promptDraft.userPromptTemplate}
+                          onChange={(event) =>
+                            setPromptDraft((current) => ({
+                              ...current,
+                              userPromptTemplate: event.target.value,
+                            }))
+                          }
+                          className="min-h-[180px] font-mono text-xs leading-6"
+                        />
+                        {selectedPrompt.module === "lms" ? (
+                          <div className="text-xs text-muted-foreground">
+                            Для LMS можно использовать плейсхолдер{" "}
+                            <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]">
+                              {"{source_type}"}
+                            </code>
+                            .
+                          </div>
+                        ) : null}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex min-h-[520px] items-center justify-center rounded-lg border border-dashed border-border/70 bg-muted/10 p-8 text-center text-sm text-muted-foreground">
+                      Выберите промпт слева, чтобы открыть его в редакторе.
+                    </div>
+                  )}
+                </div>
+              </ScrollArea>
+            </div>
+          </div>
+          <SheetFooter className="border-t">
+            <Button variant="outline" onClick={() => setPromptsOpen(false)}>
+              Закрыть
+            </Button>
+            <Button
+              onClick={() => void handleSavePrompt()}
+              disabled={!selectedPrompt || savingPrompt}
+            >
+              {savingPrompt ? (
+                <Loader2Icon data-icon="inline-start" className="animate-spin" />
+              ) : (
+                <SaveIcon data-icon="inline-start" />
+              )}
+              {savingPrompt ? "Сохраняем..." : "Сохранить промпт"}
             </Button>
           </SheetFooter>
         </SheetContent>

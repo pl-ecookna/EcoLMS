@@ -34,6 +34,17 @@ export type ProjectStatus =
 export type JobStatus = "queued" | "processing" | "done" | "failed"
 export type UploadStatus = "initiated" | "uploading" | "completed" | "aborted"
 export type ArtifactFormat = "md" | "json"
+export type PromptModule = "lms" | "meetings"
+
+export interface PromptRecord {
+  module: PromptModule
+  promptKey: string
+  title: string
+  systemPrompt: string
+  userPromptTemplate: string
+  createdAt: string
+  updatedAt: string
+}
 
 export interface SourceFileRecord {
   id: string
@@ -147,6 +158,18 @@ function promptKeysForStage(stage: StageId) {
 
 function nowIso() {
   return new Date().toISOString()
+}
+
+function mapPromptRow(row: Record<string, unknown>): PromptRecord {
+  return {
+    module: String(row.module) as PromptModule,
+    promptKey: String(row.prompt_key),
+    title: String(row.title),
+    systemPrompt: String(row.system_prompt),
+    userPromptTemplate: String(row.user_prompt_template ?? ""),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  }
 }
 
 function makeNameFromGithubRef(githubRef: string) {
@@ -374,6 +397,94 @@ export class EcolmsStore {
       },
       error: null,
     }
+  }
+
+  async listPrompts(module?: PromptModule) {
+    const result = module
+      ? await this.db.query<Record<string, unknown>>(
+          `
+          select *
+          from llm_prompts
+          where module = $1
+          order by module asc, prompt_key asc
+          `,
+          [module]
+        )
+      : await this.db.query<Record<string, unknown>>(
+          `
+          select *
+          from llm_prompts
+          order by module asc, prompt_key asc
+          `
+        )
+
+    return result.rows.map(mapPromptRow)
+  }
+
+  async getPrompt(module: PromptModule, promptKey: string) {
+    const result = await this.db.query<Record<string, unknown>>(
+      `
+      select *
+      from llm_prompts
+      where module = $1 and prompt_key = $2
+      limit 1
+      `,
+      [module, promptKey]
+    )
+    if (result.rowCount === 0) {
+      throw new NotFoundException("Промпт не найден")
+    }
+    return mapPromptRow(result.rows[0]!)
+  }
+
+  async updatePrompt(
+    module: PromptModule,
+    promptKey: string,
+    input: {
+      title?: string
+      systemPrompt?: string
+      userPromptTemplate?: string
+    }
+  ) {
+    const nextTitle = input.title?.trim()
+    const nextSystemPrompt = input.systemPrompt?.trim()
+    const nextUserPromptTemplate = input.userPromptTemplate?.trim()
+
+    if (nextTitle !== undefined && !nextTitle) {
+      throw new BadRequestException("Название промпта не может быть пустым")
+    }
+    if (nextSystemPrompt !== undefined && !nextSystemPrompt) {
+      throw new BadRequestException("System prompt не может быть пустым")
+    }
+    if (nextUserPromptTemplate !== undefined && !nextUserPromptTemplate) {
+      throw new BadRequestException("User prompt template не может быть пустым")
+    }
+
+    const result = await this.db.query<Record<string, unknown>>(
+      `
+      update llm_prompts
+      set
+        title = coalesce($3, title),
+        system_prompt = coalesce($4, system_prompt),
+        user_prompt_template = coalesce($5, user_prompt_template),
+        updated_at = now()
+      where module = $1 and prompt_key = $2
+      returning *
+      `,
+      [
+        module,
+        promptKey,
+        nextTitle ?? null,
+        nextSystemPrompt ?? null,
+        nextUserPromptTemplate ?? null,
+      ]
+    )
+
+    if (result.rowCount === 0) {
+      throw new NotFoundException("Промпт не найден")
+    }
+
+    return mapPromptRow(result.rows[0]!)
   }
 
   async listProjects(page: number, limit: number) {

@@ -48,6 +48,7 @@ export type JobStatus = "queued" | "processing" | "done" | "failed"
 export type UploadStatus = "initiated" | "uploading" | "completed" | "aborted"
 export type ArtifactFormat = "md" | "json"
 export type MeetingStatus = "draft" | "uploaded" | "processing" | "completed" | "failed"
+export type PromptModule = "lms" | "meetings"
 
 export type ApiEnvelope<T> = {
   success: boolean
@@ -213,6 +214,16 @@ export interface SystemHealthRecord {
     projects: number
     uploads: number
   }
+}
+
+export interface PromptRecord {
+  module: PromptModule
+  promptKey: string
+  title: string
+  systemPrompt: string
+  userPromptTemplate: string
+  createdAt: string
+  updatedAt: string
 }
 
 export interface MeetingSourceFileRecord {
@@ -414,6 +425,26 @@ export async function getProjectStatus(projectId: string) {
 
 export async function getSystemHealth() {
   return requestJson<SystemHealthRecord>(`/api/health`)
+}
+
+export async function listPrompts(module?: PromptModule) {
+  const suffix = module ? `?module=${module}` : ""
+  return requestJson<PromptRecord[]>(`/api/prompts${suffix}`)
+}
+
+export async function updatePrompt(
+  module: PromptModule,
+  promptKey: string,
+  input: {
+    title?: string
+    systemPrompt?: string
+    userPromptTemplate?: string
+  }
+) {
+  return requestJson<PromptRecord>(`/api/prompts/${module}/${promptKey}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  })
 }
 
 export async function initUpload(

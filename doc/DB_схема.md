@@ -136,6 +136,27 @@
 
 Примечание: таблица уже есть в схеме и используется store-слоем, но отдельный HTTP endpoint подтверждения этапа пока не опубликован.
 
+## Таблица `llm_prompts`
+
+- `module` `text`
+- `prompt_key` `text`
+- `title` `text`
+- `system_prompt` `text`
+- `user_prompt_template` `text`
+- `created_at` `timestamptz`
+- `updated_at` `timestamptz`
+
+Ограничения:
+
+- `PRIMARY KEY (module, prompt_key)`
+- `module` может быть только `lms` или `meetings`
+
+Назначение:
+
+- хранит редактируемые промпты для обоих модулей без деплоя кода
+- используется `worker`-ом как основной источник промптов
+- при пустой таблице worker дозаписывает дефолтные prompt templates из кода
+
 ## Таблица `meetings`
 
 - `id` `text`, PK

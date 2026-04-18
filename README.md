@@ -52,6 +52,7 @@ Browser
 
 - один экран-дашборд для списка проектов и карточки проекта;
 - отдельный экран `/meetings` в двухпанельной компоновке: список встреч слева, результаты обработки справа;
+- в LMS есть `Sheet`-редактор промптов для `lms` и `meetings`;
 - добавление новой записи встречи прямо из `/meetings`: создать карточку, загрузить один файл и сразу запустить обработку;
 - в `meetings` и LMS используется единый паттерн уведомлений: компактные toast-like alerts в правом нижнем углу;
 - экран `meetings` показывает доступность `LLM`, `SaluteSpeech`, баз данных и фоновых модулей через health badge, как в LMS;
@@ -69,9 +70,10 @@ Browser
 ### `apps/api`
 
 - глобальный префикс маршрутов: `/api`;
-- контроллеры: `projects`, `uploads`, `jobs`, `artifacts`, `health`;
+- контроллеры: `projects`, `uploads`, `jobs`, `artifacts`, `health`, `prompts`;
 - health-check агрегирует статус `api`, `postgres`, `redis`, `llm`, `salutespeech`, `worker`, `transcription-service`;
 - хранение и миграция минимальной схемы БД выполняются прямо из `PostgresService`;
+- таблица `llm_prompts` хранит редактируемые prompt templates для `lms` и `meetings`;
 - очередь реализована через Redis list, без BullMQ;
 - presigned URL для S3 формируются собственным кодом, без AWS SDK.
 
@@ -84,6 +86,7 @@ Browser
 - генерация `source_compiled`, `course_outline`, `course_content`, `course_test`;
 - вызов только одного выбранного LLM-провайдера (`OpenAI` или `OpenRouter`) по `LLM_PRIMARY_PROVIDER`.
 - ошибки `quota / balance / payment required` от LLM и `SaluteSpeech` нормализуются в человекочитаемый текст для UI и job logs.
+- prompt templates для `lms` и `meetings` читаются из PostgreSQL (`llm_prompts`), а встроенные prompt definitions используются как seed по умолчанию.
 
 ### `apps/transcription-service`
 

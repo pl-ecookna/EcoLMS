@@ -205,6 +205,20 @@
 - `GET /api/meetings/{id}/download`
   Возвращает список доступных экспортов встречи.
 
+### Prompt management
+
+- `GET /api/prompts`
+  Возвращает список всех редактируемых промптов.
+
+- `GET /api/prompts?module=lms`
+  Возвращает только промпты выбранного модуля: `lms` или `meetings`.
+
+- `GET /api/prompts/{module}/{promptKey}`
+  Возвращает один промпт по ключу.
+
+- `PATCH /api/prompts/{module}/{promptKey}`
+  Обновляет `title`, `systemPrompt`, `userPromptTemplate`.
+
 ## Формат ответа
 
 Успешный ответ:

@@ -5,6 +5,7 @@ import { AppController } from "./app.controller"
 import { ArtifactsController } from "./artifacts.controller"
 import { JobsController } from "./jobs.controller"
 import { MeetingsController } from "./meetings.controller"
+import { PromptsController } from "./prompts.controller"
 import { ProjectsController } from "./projects.controller"
 import { RedisQueueService } from "./redis/redis.service"
 import { UploadsController } from "./uploads.controller"
@@ -27,6 +28,7 @@ import { MeetingsStore } from "./store/meetings.store"
     ArtifactsController,
     JobsController,
     MeetingsController,
+    PromptsController,
   ],
   providers: [
     AppService,
