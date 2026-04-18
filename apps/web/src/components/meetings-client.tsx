@@ -22,6 +22,7 @@ import {
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 
+import { cn } from "@/lib/utils"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -43,6 +44,7 @@ import {
   PaginationPrevious,
 } from "@/components/ui/pagination"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Separator } from "@/components/ui/separator"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
@@ -367,12 +369,16 @@ function downloadText(filename: string, content: string) {
   URL.revokeObjectURL(url)
 }
 
-export function MeetingsListView({
+export function MeetingsWorkspaceView({
   currentPage,
   pageData,
+  selectedMeetingId,
+  selectedMeeting,
 }: {
   currentPage: number
   pageData: PaginatedMeetings
+  selectedMeetingId: string | null
+  selectedMeeting: MeetingDetailRecord | null
 }) {
   const stats = useMemo(() => {
     const items = pageData.items
@@ -430,98 +436,142 @@ export function MeetingsListView({
           </div>
         </section>
 
-        <Card>
-          <CardHeader className="border-b">
-            <CardTitle>Список встреч</CardTitle>
-            <CardDescription>
-              Без поиска и фильтров на первом этапе. Переход по карточке открывает
-              транскрипт и markdown-результат.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="p-0">
-            {pageData.items.length > 0 ? (
-              <div className="overflow-hidden">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Встреча</TableHead>
-                      <TableHead>Статус</TableHead>
-                      <TableHead>Источник</TableHead>
-                      <TableHead>Спикеры</TableHead>
-                      <TableHead>Длительность</TableHead>
-                      <TableHead>Обновлено</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {pageData.items.map((meeting) => (
-                      <TableRow key={meeting.id}>
-                        <TableCell className="max-w-[320px]">
-                          <div className="flex flex-col gap-1">
-                            <Link
-                              href={`/meetings/${meeting.id}`}
-                              className="font-medium text-foreground hover:underline"
-                            >
-                              {meeting.title}
-                            </Link>
-                            <div className="line-clamp-2 text-sm text-muted-foreground">
-                              {meeting.description || "Описание не заполнено"}
+        <section className="grid flex-1 gap-4 lg:grid-cols-[380px_minmax(0,1fr)]">
+          <Card className="flex min-h-[760px] flex-col overflow-hidden border-border/80 bg-card">
+            <CardHeader className="border-b bg-secondary/35">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <CardTitle>Список встреч</CardTitle>
+                  <CardDescription>
+                    Выберите встречу слева, а справа откроются результаты обработки.
+                  </CardDescription>
+                </div>
+                <Badge variant="outline">{pageData.total}</Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="flex min-h-0 flex-1 flex-col p-0">
+              <ScrollArea className="min-h-0 flex-1">
+                {pageData.items.length > 0 ? (
+                  <div className="space-y-3 p-3">
+                    {pageData.items.map((meeting) => {
+                      const isSelected = meeting.id === selectedMeetingId
+                      return (
+                        <Link
+                          key={meeting.id}
+                          href={`/meetings?page=${currentPage}&meeting=${meeting.id}`}
+                          className={cn(
+                            "block rounded-2xl border p-4 transition-colors hover:bg-muted/35",
+                            isSelected
+                              ? "border-primary/40 bg-muted/40 shadow-sm"
+                              : "border-border/70 bg-card"
+                          )}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0 space-y-2">
+                              <div className="truncate text-base font-semibold">
+                                {meeting.title}
+                              </div>
+                              <div className="line-clamp-2 text-sm text-muted-foreground">
+                                {meeting.description || "Описание не заполнено"}
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                {meeting.id}
+                              </div>
                             </div>
-                            <div className="text-xs text-muted-foreground">
-                              {meeting.id}
-                            </div>
+                            <StatusBadge status={meeting.status} />
                           </div>
-                        </TableCell>
-                        <TableCell>
-                          <StatusBadge status={meeting.status} />
-                        </TableCell>
-                        <TableCell className="max-w-[260px] text-sm text-muted-foreground">
-                          {sourceFileLabel(meeting)}
-                        </TableCell>
-                        <TableCell>{meeting.speakersCount}</TableCell>
-                        <TableCell>{formatDuration(meeting.durationSeconds)}</TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {formatDateTime(meeting.updatedAt)}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <Badge variant="outline">{meeting.speakersCount} спик.</Badge>
+                            <Badge variant="outline">
+                              {formatDuration(meeting.durationSeconds)}
+                            </Badge>
+                          </div>
+                          <div className="mt-3 text-xs text-muted-foreground">
+                            {formatDateTime(meeting.updatedAt)}
+                          </div>
+                        </Link>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <div className="p-4">
+                    <EmptyState
+                      icon={VideoIcon}
+                      title="Пока нет встреч"
+                      description="Когда появятся загруженные файлы встреч, они будут показаны здесь."
+                    />
+                  </div>
+                )}
+              </ScrollArea>
+              <Separator />
+              <div className="flex items-center justify-between gap-3 px-4 py-3">
+                <div className="text-sm text-muted-foreground">
+                  Показаны {pageData.total === 0 ? 0 : (currentPage - 1) * pageData.limit + 1}-
+                  {Math.min(currentPage * pageData.limit, pageData.total)} из {pageData.total}
+                </div>
+                <Pagination className="mx-0 w-auto justify-end">
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        href={`/meetings?page=${Math.max(1, currentPage - 1)}${
+                          selectedMeetingId ? `&meeting=${selectedMeetingId}` : ""
+                        }`}
+                        aria-disabled={currentPage <= 1}
+                      />
+                    </PaginationItem>
+                    <PaginationItem>
+                      <PaginationLink href={`/meetings?page=${currentPage}`} isActive>
+                        {currentPage} / {pageData.totalPages}
+                      </PaginationLink>
+                    </PaginationItem>
+                    <PaginationItem>
+                      <PaginationNext
+                        href={`/meetings?page=${Math.min(pageData.totalPages, currentPage + 1)}${
+                          selectedMeetingId ? `&meeting=${selectedMeetingId}` : ""
+                        }`}
+                        aria-disabled={currentPage >= pageData.totalPages}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
               </div>
-            ) : (
-              <div className="p-4">
-                <EmptyState
-                  icon={VideoIcon}
-                  title="Пока нет встреч"
-                  description="Когда появятся загруженные файлы встреч, они будут показаны здесь."
-                />
-              </div>
-            )}
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
 
-        <Pagination className="justify-end">
-          <PaginationContent>
-            <PaginationItem>
-              <PaginationPrevious
-                text="Назад"
-                href={`/meetings?page=${Math.max(1, currentPage - 1)}`}
-                aria-disabled={currentPage <= 1}
-              />
-            </PaginationItem>
-            <PaginationItem>
-              <PaginationLink href={`/meetings?page=${currentPage}`} isActive>
-                {currentPage} / {pageData.totalPages}
-              </PaginationLink>
-            </PaginationItem>
-            <PaginationItem>
-              <PaginationNext
-                text="Вперед"
-                href={`/meetings?page=${Math.min(pageData.totalPages, currentPage + 1)}`}
-                aria-disabled={currentPage >= pageData.totalPages}
-              />
-            </PaginationItem>
-          </PaginationContent>
-        </Pagination>
+          <Card className="flex min-h-[760px] flex-col overflow-hidden border-border/80 bg-card">
+            <CardHeader className="border-b bg-secondary/20">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <CardTitle>Результаты обработки</CardTitle>
+                  <CardDescription>
+                    Транскрипт, markdown и правка speaker labels для выбранной встречи.
+                  </CardDescription>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="min-h-0 flex-1 p-0">
+              {selectedMeeting ? (
+                <ScrollArea className="h-[760px]">
+                  <MeetingDetailView
+                    meetingId={selectedMeeting.id}
+                    initialMeeting={selectedMeeting}
+                    embedded
+                  />
+                </ScrollArea>
+              ) : (
+                <div className="flex h-full min-h-[680px] items-center justify-center p-8 text-center">
+                  <div className="max-w-md space-y-2">
+                    <h2 className="text-xl font-semibold">Выберите встречу</h2>
+                    <p className="text-sm text-muted-foreground">
+                      Слева доступен список встреч. После выбора здесь откроются транскрипт,
+                      markdown и история обработки.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </section>
       </div>
     </div>
   )
@@ -530,9 +580,11 @@ export function MeetingsListView({
 export function MeetingDetailView({
   meetingId,
   initialMeeting,
+  embedded = false,
 }: {
   meetingId: string
   initialMeeting: MeetingDetailRecord
+  embedded?: boolean
 }) {
   const [activeTab, setActiveTab] = useState("markdown")
   const [speakerDrafts, setSpeakerDrafts] = useState<Record<string, string>>(() =>
@@ -614,13 +666,27 @@ export function MeetingDetailView({
   }
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(59,130,246,0.10),_transparent_32%),radial-gradient(circle_at_top_right,_rgba(16,185,129,0.10),_transparent_28%),linear-gradient(to_bottom,_var(--background),_var(--background))]">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8">
+    <div
+      className={
+        embedded
+          ? "h-full min-h-0 bg-transparent"
+          : "min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(59,130,246,0.10),_transparent_32%),radial-gradient(circle_at_top_right,_rgba(16,185,129,0.10),_transparent_28%),linear-gradient(to_bottom,_var(--background),_var(--background))]"
+      }
+    >
+      <div
+        className={
+          embedded
+            ? "flex min-h-0 flex-col gap-4 p-4"
+            : "mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 sm:px-6 lg:px-8"
+        }
+      >
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <Button variant="ghost" nativeButton={false} render={<Link href="/meetings" />}>
-            <ArrowLeftIcon data-icon="inline-start" />
-            К списку
-          </Button>
+          {embedded ? null : (
+            <Button variant="ghost" nativeButton={false} render={<Link href="/meetings" />}>
+              <ArrowLeftIcon data-icon="inline-start" />
+              К списку
+            </Button>
+          )}
 
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" onClick={handleRefresh}>
