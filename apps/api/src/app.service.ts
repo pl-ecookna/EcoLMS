@@ -113,6 +113,47 @@ export class AppService {
     }
   }
 
+  private firstDefinedEnv(...names: string[]) {
+    for (const name of names) {
+      const value = process.env[name]?.trim()
+      if (value) {
+        return value
+      }
+    }
+    return ""
+  }
+
+  private resolveSaluteSpeechAuthConfig() {
+    const authKey = this.firstDefinedEnv("SALUTESPEECH_AUTH_KEY", "SBER_AUTH_KEY")
+    const clientId = this.firstDefinedEnv("SALUTESPEECH_CLIENT_ID", "SBER_CLIENT_ID")
+    const clientSecret = this.firstDefinedEnv(
+      "SALUTESPEECH_CLIENT_SECRET",
+      "SBER_CLIENT_SECRET"
+    )
+    const oauthUrl = this.firstDefinedEnv("SALUTESPEECH_OAUTH_URL", "SBER_OAUTH_URL")
+    const scope =
+      this.firstDefinedEnv("SALUTESPEECH_SCOPE", "SBER_SCOPE") || "SALUTE_SPEECH_PERS"
+    const caCertPath = this.firstDefinedEnv(
+      "SALUTESPEECH_CA_CERT_PATH",
+      "SALUTESPEECH_CA_CERT",
+      "SBER_CA_CERT_PATH"
+    )
+
+    const resolvedAuthKey =
+      authKey ||
+      (clientId && clientSecret
+        ? Buffer.from(`${clientId}:${clientSecret}`, "utf-8").toString("base64")
+        : "")
+
+    return {
+      authKey: resolvedAuthKey,
+      oauthUrl,
+      scope,
+      caCertPath,
+      hasCredentials: Boolean(resolvedAuthKey || clientId || clientSecret),
+    }
+  }
+
   private async checkPostgres(): Promise<ServiceState> {
     const checkedAt = this.nowIso()
     try {
@@ -267,10 +308,7 @@ export class AppService {
 
   private async checkSaluteSpeech(): Promise<ServiceState> {
     const checkedAt = this.nowIso()
-    const authKey = process.env.SALUTESPEECH_AUTH_KEY?.trim()
-    const oauthUrl = process.env.SALUTESPEECH_OAUTH_URL?.trim()
-    const scope = process.env.SALUTESPEECH_SCOPE?.trim() || "SALUTE_SPEECH_PERS"
-    const caCertPath = process.env.SALUTESPEECH_CA_CERT_PATH?.trim() || ""
+    const { authKey, oauthUrl, scope, caCertPath } = this.resolveSaluteSpeechAuthConfig()
 
     if (!authKey || !oauthUrl) {
       return {

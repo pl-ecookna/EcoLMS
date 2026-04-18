@@ -188,4 +188,8 @@ Browser
 - `SALUTESPEECH_POLL_INTERVAL_SECONDS`
 - `SALUTESPEECH_TIMEOUT_SECONDS`
 
+Для обратной совместимости `api` и `worker` также понимают старые алиасы `SBER_*`
+и могут собрать OAuth Basic key из `SBER_CLIENT_ID` + `SBER_CLIENT_SECRET`, если
+`SALUTESPEECH_AUTH_KEY` не задан.
+
 Полный пример находится в [.env.example](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/.env.example).

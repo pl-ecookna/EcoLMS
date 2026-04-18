@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import socket
@@ -103,9 +104,36 @@ def normalize_service_url(value: str | None, *, default_prod: str, default_dev: 
     return value
 
 
+def first_defined_env(*names: str) -> str:
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
+def resolve_salutespeech_auth_key() -> str:
+    auth_key = first_defined_env("SALUTESPEECH_AUTH_KEY", "SBER_AUTH_KEY")
+    if auth_key:
+        return auth_key
+
+    client_id = first_defined_env("SALUTESPEECH_CLIENT_ID", "SBER_CLIENT_ID")
+    client_secret = first_defined_env(
+        "SALUTESPEECH_CLIENT_SECRET",
+        "SBER_CLIENT_SECRET",
+    )
+    if client_id and client_secret:
+        raw = f"{client_id}:{client_secret}".encode("utf-8")
+        return base64.b64encode(raw).decode("ascii")
+    return ""
+
+
 def load_config() -> WorkerConfig:
-    salutespeech_auth_key = os.getenv("SALUTESPEECH_AUTH_KEY", "").strip()
-    salutespeech_rest_url = os.getenv(
+    salutespeech_auth_key = resolve_salutespeech_auth_key()
+    salutespeech_rest_url = first_defined_env(
+        "SALUTESPEECH_REST_URL",
+        "SBER_REST_URL",
+    ) or os.getenv(
         "SALUTESPEECH_REST_URL",
         "https://smartspeech.sber.ru/rest/v1",
     ).strip()
@@ -147,7 +175,10 @@ def load_config() -> WorkerConfig:
         job_queue_key=os.getenv("WORKER_JOB_QUEUE_KEY", "ecolms:processing-jobs"),
         meeting_job_queue_key=os.getenv("WORKER_MEETING_JOB_QUEUE_KEY", "ecolms:meeting-jobs"),
         salutespeech_auth_key=salutespeech_auth_key,
-        salutespeech_oauth_url=os.getenv("SALUTESPEECH_OAUTH_URL", "").strip(),
+        salutespeech_oauth_url=first_defined_env(
+            "SALUTESPEECH_OAUTH_URL",
+            "SBER_OAUTH_URL",
+        ),
         salutespeech_rest_url=salutespeech_rest_url,
         salutespeech_upload_url=os.getenv(
             "SALUTESPEECH_UPLOAD_URL",
@@ -165,10 +196,16 @@ def load_config() -> WorkerConfig:
             "SALUTESPEECH_DOWNLOAD_URL",
             f"{salutespeech_rest_url.rstrip('/')}/data:download",
         ).strip(),
-        salutespeech_scope=os.getenv("SALUTESPEECH_SCOPE", "SALUTE_SPEECH_PERS").strip(),
+        salutespeech_scope=first_defined_env(
+            "SALUTESPEECH_SCOPE",
+            "SBER_SCOPE",
+        ) or "SALUTE_SPEECH_PERS",
         salutespeech_model=os.getenv("SALUTESPEECH_MODEL", "general").strip() or "general",
         salutespeech_language=os.getenv("SALUTESPEECH_LANGUAGE", "ru-RU").strip() or "ru-RU",
-        salutespeech_ca_cert_path=os.getenv("SALUTESPEECH_CA_CERT_PATH", "").strip(),
+        salutespeech_ca_cert_path=first_defined_env(
+            "SALUTESPEECH_CA_CERT_PATH",
+            "SBER_CA_CERT_PATH",
+        ),
         salutespeech_ssl_no_verify=os.getenv("SALUTESPEECH_SSL_NO_VERIFY", "false").strip().lower()
         in {"1", "true", "yes", "on"},
         salutespeech_poll_interval_seconds=float(

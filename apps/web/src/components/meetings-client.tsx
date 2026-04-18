@@ -703,17 +703,26 @@ export function MeetingsWorkspaceView({
     }
 
     const blockers: string[] = []
-    const requiredServices: Array<{ name: string; state: ServiceHealthState }> = [
+    const requiredServices: Array<{
+      name: string
+      state: ServiceHealthState
+      allowUnknown?: boolean
+    }> = [
       { name: "API", state: health.services.api },
       { name: "Postgres", state: health.services.postgres },
       { name: "Redis", state: health.services.redis },
-      { name: "Worker", state: health.services.worker },
-      { name: "LLM", state: health.services.llm },
-      { name: "SaluteSpeech", state: health.services.salutespeech },
+      { name: "Worker", state: health.services.worker, allowUnknown: true },
+      { name: "LLM", state: health.services.llm, allowUnknown: true },
+      { name: "SaluteSpeech", state: health.services.salutespeech, allowUnknown: true },
     ]
 
     for (const service of requiredServices) {
-      if (service.state.status !== "up") {
+      const shouldBlock =
+        service.state.status === "down" ||
+        service.state.status === "degraded" ||
+        (!service.allowUnknown && service.state.status === "unknown")
+
+      if (shouldBlock) {
         blockers.push(`${service.name}: ${service.state.details}`)
       }
     }
