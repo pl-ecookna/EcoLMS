@@ -1995,7 +1995,6 @@ export function MeetingDetailView({
                     <TableRow>
                       <TableHead>Label</TableHead>
                       <TableHead>Отображаемое имя</TableHead>
-                      <TableHead>Состояние</TableHead>
                       <TableHead />
                     </TableRow>
                   </TableHeader>
@@ -2021,13 +2020,6 @@ export function MeetingDetailView({
                               }
                             />
                           </div>
-                        </TableCell>
-                        <TableCell>
-                          {speakerOverrides[speaker.id] ? (
-                            <Badge variant="secondary">Изменён вручную</Badge>
-                          ) : (
-                            <Badge variant="outline">Авто</Badge>
-                          )}
                         </TableCell>
                         <TableCell className="text-right">
                           <Button
