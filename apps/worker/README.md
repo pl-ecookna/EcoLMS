@@ -48,6 +48,9 @@
 Для LLM-вызовов (`OpenAI`/`OpenRouter`) worker использует trust store из `certifi`.
 Prompt templates для `lms` и `meetings` worker читает из таблицы `llm_prompts` в PostgreSQL.
 Если запись в таблице отсутствует, worker дозаписывает дефолтный prompt из кода и использует его как seed.
+Для `meeting_actions` worker умеет восстанавливать человекочитаемый markdown из полей
+`decisions`, `actionItems` и `openQuestions`, если LLM вернул валидный JSON, но оставил
+поле `markdown` пустым.
 
 Текущий формат подготовки аудио для `SaluteSpeech` в V1:
 

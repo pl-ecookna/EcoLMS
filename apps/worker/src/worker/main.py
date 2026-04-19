@@ -1741,6 +1741,82 @@ def build_meeting_llm_transcript_input(segments: list[dict[str, Any]]) -> str:
     return "\n\n".join(parts).strip()
 
 
+def build_meeting_actions_markdown(result: dict[str, Any]) -> str:
+    def extract_text(item: Any) -> str:
+        if isinstance(item, str):
+            return item.strip()
+        if isinstance(item, dict):
+            value = str(item.get("text") or item.get("title") or "").strip()
+            return value
+        return ""
+
+    def extract_list(value: Any) -> list[dict[str, Any] | str]:
+        if not isinstance(value, list):
+            return []
+        normalized: list[dict[str, Any] | str] = []
+        for item in value:
+            if isinstance(item, (dict, str)):
+                normalized.append(item)
+        return normalized
+
+    decisions = extract_list(result.get("decisions"))
+    action_items = extract_list(result.get("actionItems"))
+    open_questions = extract_list(result.get("openQuestions"))
+    short_summary = str(result.get("shortSummary") or "").strip()
+
+    lines: list[str] = []
+    if short_summary:
+        lines.extend(["# Поручения и решения", "", short_summary, ""])
+
+    if decisions:
+        lines.extend(["## Решения", ""])
+        for item in decisions:
+            text = extract_text(item)
+            if text:
+                lines.append(f"- {text}")
+        lines.append("")
+
+    if action_items:
+        lines.extend(["## Поручения", ""])
+        for item in action_items:
+            if not isinstance(item, dict):
+                text = extract_text(item)
+                if text:
+                    lines.append(f"- {text}")
+                continue
+            text = extract_text(item)
+            if not text:
+                continue
+            details: list[str] = []
+            assignee = str(item.get("assignee") or "").strip()
+            deadline = str(item.get("deadline") or "").strip()
+            source_segment_ids = item.get("sourceSegmentIds")
+            if assignee:
+                details.append(f"ответственный: {assignee}")
+            if deadline:
+                details.append(f"дедлайн: {deadline}")
+            if isinstance(source_segment_ids, list):
+                normalized_ids = [str(value).strip() for value in source_segment_ids if str(value).strip()]
+                if normalized_ids:
+                    details.append(f"segment_id: {', '.join(normalized_ids)}")
+            if details:
+                lines.append(f"- {text} ({'; '.join(details)})")
+            else:
+                lines.append(f"- {text}")
+        lines.append("")
+
+    if open_questions:
+        lines.extend(["## Открытые вопросы", ""])
+        for item in open_questions:
+            text = extract_text(item)
+            if text:
+                lines.append(f"- {text}")
+        lines.append("")
+
+    markdown = "\n".join(lines).strip()
+    return f"{markdown}\n" if markdown else ""
+
+
 def generate_meeting_markdown_with_llm(
     conn: psycopg.Connection,
     config: WorkerConfig,
@@ -1788,6 +1864,8 @@ def generate_meeting_markdown_with_llm(
         parsed = parse_json_from_text(content)
         markdown = str(parsed.get("markdown") or "").strip()
         short_summary = str(parsed.get("shortSummary") or "").strip()
+        if stage == "meeting_actions" and not markdown:
+            markdown = build_meeting_actions_markdown(parsed).strip()
         if not markdown:
             raise RuntimeError("LLM вернул пустое поле markdown.")
         return {
