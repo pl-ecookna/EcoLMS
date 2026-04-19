@@ -53,6 +53,7 @@ import {
   PaginationPrevious,
 } from "@/components/ui/pagination"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Skeleton } from "@/components/ui/skeleton"
 import { Separator } from "@/components/ui/separator"
 import {
   Sheet,
@@ -95,7 +96,9 @@ import {
   createMeeting,
   deleteMeeting,
   getSystemHealth,
+  getMeeting,
   initMeetingUpload,
+  listMeetings,
   signMeetingUploadPart,
   startMeeting,
   updateMeetingSpeaker,
@@ -220,8 +223,10 @@ function normalizeMarkdownSection(text: string, fallback: string) {
 type ActionItem = {
   text?: string
   title?: string
+  description?: string
   assignee?: string
   deadline?: string
+  sourceSegmentIds?: number[]
 }
 
 function getActionsItems(meeting: MeetingDetailRecord | null) {
@@ -237,7 +242,8 @@ function getActionsItems(meeting: MeetingDetailRecord | null) {
 }
 
 function formatActionItem(item: ActionItem) {
-  const text = item.title?.trim() || item.text?.trim() || "Поручение"
+  const text =
+    item.title?.trim() || item.text?.trim() || item.description?.trim() || "Поручение"
   const details = [item.assignee?.trim(), item.deadline?.trim()]
     .filter(Boolean)
     .map((value, index) => {
@@ -252,6 +258,113 @@ function formatActionItem(item: ActionItem) {
   }
 
   return `- ${text} (${details.join(", ")})`
+}
+
+function isMeetingActiveStatus(status: MeetingStatus) {
+  return status === "uploaded" || status === "processing"
+}
+
+function isActiveJobStatus(status: MeetingJobRecord["status"]) {
+  return status === "queued" || status === "processing"
+}
+
+function getStageJob(
+  meeting: MeetingDetailRecord | null,
+  stage: MeetingStageId
+): MeetingJobRecord | undefined {
+  if (!meeting) {
+    return undefined
+  }
+
+  return [...meeting.jobs]
+    .filter((job) => job.stage === stage)
+    .sort((left, right) => {
+      const leftTime = new Date(left.createdAt).getTime()
+      const rightTime = new Date(right.createdAt).getTime()
+      return rightTime - leftTime
+    })[0]
+}
+
+type MeetingStageUiStatus = "done" | "processing" | "queued" | "failed" | "pending"
+
+function getMeetingStageUiStatus(
+  meeting: MeetingDetailRecord | null,
+  stage: MeetingStageId
+): MeetingStageUiStatus {
+  const job = getStageJob(meeting, stage)
+  if (!job) {
+    return "pending"
+  }
+
+  if (job.status === "done") {
+    return "done"
+  }
+  if (job.status === "processing") {
+    return "processing"
+  }
+  if (job.status === "queued") {
+    return "queued"
+  }
+  if (job.status === "failed") {
+    return "failed"
+  }
+
+  return "pending"
+}
+
+function getMeetingProcessingProgress(meeting: MeetingDetailRecord | null) {
+  if (!meeting) {
+    return 0
+  }
+
+  const statuses = (
+    [
+      "audio_prepared",
+      "transcript_compiled",
+      "meeting_summary",
+      "meeting_protocol",
+      "meeting_actions",
+    ] as MeetingStageId[]
+  ).map((stage) => getMeetingStageUiStatus(meeting, stage))
+
+  const doneCount = statuses.filter((status) => status === "done").length
+  const processingCount = statuses.filter((status) => status === "processing").length
+  const queuedCount = statuses.filter((status) => status === "queued").length
+
+  const total = statuses.length || 1
+  const weighted = doneCount + processingCount * 0.6 + queuedCount * 0.2
+
+  return Math.round((weighted / total) * 100)
+}
+
+function getStageStatusLabel(status: MeetingStageUiStatus) {
+  switch (status) {
+    case "done":
+      return "Готово"
+    case "processing":
+      return "В работе"
+    case "queued":
+      return "В очереди"
+    case "failed":
+      return "Ошибка"
+    default:
+      return "Ожидание"
+  }
+}
+
+function getStageStatusTone(status: MeetingStageUiStatus) {
+  switch (status) {
+    case "done":
+      return "border-emerald-200 bg-emerald-50 text-emerald-700"
+    case "processing":
+      return "border-blue-200 bg-blue-50 text-blue-700"
+    case "queued":
+      return "border-amber-200 bg-amber-50 text-amber-700"
+    case "failed":
+      return "border-red-200 bg-red-50 text-red-700"
+    default:
+      return "border-border bg-muted/40 text-muted-foreground"
+  }
 }
 
 function buildReadableMarkdown(meeting: MeetingDetailRecord) {
@@ -508,6 +621,124 @@ function EmptyState({
   )
 }
 
+function MeetingProcessingState({
+  meeting,
+}: {
+  meeting: MeetingDetailRecord
+}) {
+  const stages: MeetingStageId[] = [
+    "audio_prepared",
+    "transcript_compiled",
+    "meeting_summary",
+    "meeting_protocol",
+    "meeting_actions",
+  ]
+  const progress = getMeetingProcessingProgress(meeting)
+
+  return (
+    <Card className="border-dashed">
+      <CardContent className="space-y-4 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="space-y-1">
+            <div className="text-sm font-medium">Обработка встречи выполняется</div>
+            <div className="text-xs text-muted-foreground">
+              Статусы обновляются автоматически, страницу обновлять не нужно.
+            </div>
+          </div>
+          <Badge variant="outline">{progress}%</Badge>
+        </div>
+        <Progress value={progress} />
+        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-5">
+          {stages.map((stage) => {
+            const status = getMeetingStageUiStatus(meeting, stage)
+            return (
+              <div
+                key={stage}
+                className={cn(
+                  "rounded-lg border px-3 py-2",
+                  getStageStatusTone(status),
+                  status === "processing" ? "animate-pulse" : ""
+                )}
+              >
+                <div className="text-xs font-medium">{stageTitle(stage)}</div>
+                <div className="mt-1 text-xs opacity-90">{getStageStatusLabel(status)}</div>
+              </div>
+            )
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function MarkdownLoadingState() {
+  return (
+    <div className="space-y-3 rounded-lg border bg-background p-4">
+      <Skeleton className="h-8 w-2/5" />
+      <Skeleton className="h-4 w-full" />
+      <Skeleton className="h-4 w-11/12" />
+      <Skeleton className="h-4 w-4/5" />
+      <Skeleton className="h-6 w-40" />
+      <Skeleton className="h-4 w-full" />
+      <Skeleton className="h-4 w-10/12" />
+      <Skeleton className="h-4 w-9/12" />
+    </div>
+  )
+}
+
+function TranscriptLoadingState() {
+  return (
+    <div className="flex flex-col gap-2 p-3">
+      {Array.from({ length: 4 }).map((_, index) => (
+        <div key={index} className="rounded-lg border bg-card px-3 py-3">
+          <div className="flex items-center gap-2">
+            <Skeleton className="h-5 w-24" />
+            <Skeleton className="h-5 w-20" />
+          </div>
+          <div className="mt-3 space-y-2">
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-11/12" />
+            <Skeleton className="h-4 w-4/5" />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function MeetingCardProgress({
+  meeting,
+}: {
+  meeting: MeetingListRecord | MeetingDetailRecord
+}) {
+  const currentStatus = meeting.status
+
+  if (currentStatus !== "processing" && currentStatus !== "uploaded" && currentStatus !== "failed") {
+    return null
+  }
+
+  const progress =
+    "jobs" in meeting
+      ? getMeetingProcessingProgress(meeting)
+      : currentStatus === "failed"
+        ? 100
+        : currentStatus === "processing"
+          ? 45
+          : 15
+
+  return (
+    <div className="mt-2 space-y-1.5">
+      <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+        <span>
+          {currentStatus === "failed" ? "Обработка остановлена" : "Идёт обработка"}
+        </span>
+        <span>{progress}%</span>
+      </div>
+      <Progress value={progress} className="h-1.5" />
+    </div>
+  )
+}
+
 function downloadText(filename: string, content: string) {
   const blob = new Blob([content], { type: "text/markdown;charset=utf-8" })
   const url = URL.createObjectURL(blob)
@@ -623,6 +854,16 @@ export function MeetingsWorkspaceView({
   const [createMessage, setCreateMessage] = useState("")
   const [createProgress, setCreateProgress] = useState(0)
   const [isCreating, setIsCreating] = useState(false)
+  const [meetingsPageState, setMeetingsPageState] = useState(pageData)
+  const [selectedMeetingState, setSelectedMeetingState] = useState(selectedMeeting)
+
+  useEffect(() => {
+    setMeetingsPageState(pageData)
+  }, [pageData])
+
+  useEffect(() => {
+    setSelectedMeetingState(selectedMeeting)
+  }, [selectedMeeting])
 
   function dismissAlert(id: string) {
     setAlerts((current) => current.filter((item) => item.id !== id))
@@ -673,6 +914,71 @@ export function MeetingsWorkspaceView({
       window.clearInterval(intervalId)
     }
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function refreshMeetingsState() {
+      try {
+        const nextPage = await listMeetings(currentPage, pageData.limit)
+        if (cancelled) {
+          return
+        }
+        setMeetingsPageState(nextPage)
+
+        if (selectedMeetingId) {
+          const nextMeeting = await getMeeting(selectedMeetingId)
+          if (!cancelled) {
+            setSelectedMeetingState(nextMeeting)
+          }
+        } else if (!cancelled) {
+          setSelectedMeetingState(null)
+        }
+      } catch {
+        // keep current state; next tick will retry quietly
+      }
+    }
+
+    const hasActiveListMeeting = meetingsPageState.items.some((meeting) =>
+      isMeetingActiveStatus(meeting.status)
+    )
+    const hasActiveSelectedMeeting =
+      selectedMeetingState?.status === "uploaded" ||
+      selectedMeetingState?.status === "processing" ||
+      selectedMeetingState?.jobs.some((job) => isActiveJobStatus(job.status)) === true
+
+    if (!hasActiveListMeeting && !hasActiveSelectedMeeting) {
+      return
+    }
+
+    void refreshMeetingsState()
+
+    const getIntervalMs = () => (document.hidden ? 15_000 : 5_000)
+    let intervalId = window.setInterval(() => {
+      void refreshMeetingsState()
+    }, getIntervalMs())
+
+    const handleVisibilityChange = () => {
+      window.clearInterval(intervalId)
+      intervalId = window.setInterval(() => {
+        void refreshMeetingsState()
+      }, getIntervalMs())
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityChange)
+
+    return () => {
+      cancelled = true
+      document.removeEventListener("visibilitychange", handleVisibilityChange)
+      window.clearInterval(intervalId)
+    }
+  }, [
+    currentPage,
+    meetingsPageState.items,
+    pageData.limit,
+    selectedMeetingId,
+    selectedMeetingState,
+  ])
 
   const overallHealthStatus: ServiceHealthStatus = systemHealth?.status ?? "unknown"
   const serviceEntries: Array<{
@@ -835,8 +1141,8 @@ export function MeetingsWorkspaceView({
       notify("success", "Запись добавлена", "Встреча создана и отправлена в обработку.")
       setCreateOpen(false)
       resetCreateMeetingForm()
+      setSelectedMeetingState(null)
       router.push(`/meetings?page=1&meeting=${created.id}`)
-      router.refresh()
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Не удалось добавить запись встречи"
@@ -938,7 +1244,7 @@ export function MeetingsWorkspaceView({
                   <CardTitle>Список встреч</CardTitle>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Badge variant="outline">{pageData.total}</Badge>
+                  <Badge variant="outline">{meetingsPageState.total}</Badge>
                   <Button size="sm" onClick={() => setCreateOpen(true)}>
                     <PlusIcon data-icon="inline-start" />
                     Добавить
@@ -948,9 +1254,9 @@ export function MeetingsWorkspaceView({
             </CardHeader>
             <CardContent className="flex min-h-0 flex-1 flex-col p-0">
               <ScrollArea className="min-h-0 flex-1">
-                {pageData.items.length > 0 ? (
+                {meetingsPageState.items.length > 0 ? (
                   <div className="flex flex-col gap-2 p-2">
-                    {pageData.items.map((meeting) => {
+                    {meetingsPageState.items.map((meeting) => {
                       const isSelected = meeting.id === selectedMeetingId
                       return (
                         <div
@@ -1013,15 +1319,22 @@ export function MeetingsWorkspaceView({
                                         await deleteMeeting(meeting.id)
                                         const nextMeetingId =
                                           selectedMeetingId === meeting.id
-                                            ? pageData.items.find(
+                                            ? meetingsPageState.items.find(
                                                 (item) => item.id !== meeting.id
                                               )?.id ?? null
                                             : selectedMeetingId
                                         const nextUrl = `/meetings?page=${currentPage}${
                                           nextMeetingId ? `&meeting=${nextMeetingId}` : ""
                                         }`
+                                        setMeetingsPageState((current) => ({
+                                          ...current,
+                                          items: current.items.filter((item) => item.id !== meeting.id),
+                                          total: Math.max(0, current.total - 1),
+                                        }))
+                                        if (selectedMeetingId === meeting.id) {
+                                          setSelectedMeetingState(null)
+                                        }
                                         router.replace(nextUrl)
-                                        router.refresh()
                                       })()
                                     }}
                                     className="items-start gap-3 py-2"
@@ -1049,6 +1362,7 @@ export function MeetingsWorkspaceView({
                               {formatDateTime(meeting.updatedAt)}
                             </div>
                           </div>
+                          <MeetingCardProgress meeting={meeting} />
                         </div>
                       )
                     })}
@@ -1066,8 +1380,8 @@ export function MeetingsWorkspaceView({
               <Separator />
               <div className="flex items-center justify-between gap-3 px-3 py-2.5">
                 <div className="text-xs text-muted-foreground">
-                  Показаны {pageData.total === 0 ? 0 : (currentPage - 1) * pageData.limit + 1}-
-                  {Math.min(currentPage * pageData.limit, pageData.total)} из {pageData.total}
+                  Показаны {meetingsPageState.total === 0 ? 0 : (currentPage - 1) * pageData.limit + 1}-
+                  {Math.min(currentPage * pageData.limit, meetingsPageState.total)} из {meetingsPageState.total}
                 </div>
                 <Pagination className="mx-0 w-auto justify-end">
                   <PaginationContent>
@@ -1081,15 +1395,15 @@ export function MeetingsWorkspaceView({
                     </PaginationItem>
                     <PaginationItem>
                       <PaginationLink href={`/meetings?page=${currentPage}`} isActive>
-                        {currentPage} / {pageData.totalPages}
+                        {currentPage} / {meetingsPageState.totalPages}
                       </PaginationLink>
                     </PaginationItem>
                     <PaginationItem>
                       <PaginationNext
-                        href={`/meetings?page=${Math.min(pageData.totalPages, currentPage + 1)}${
+                        href={`/meetings?page=${Math.min(meetingsPageState.totalPages, currentPage + 1)}${
                           selectedMeetingId ? `&meeting=${selectedMeetingId}` : ""
                         }`}
-                        aria-disabled={currentPage >= pageData.totalPages}
+                        aria-disabled={currentPage >= meetingsPageState.totalPages}
                       />
                     </PaginationItem>
                   </PaginationContent>
@@ -1107,11 +1421,11 @@ export function MeetingsWorkspaceView({
               </div>
             </CardHeader>
             <CardContent className="min-h-0 flex-1 p-0">
-              {selectedMeeting ? (
+              {selectedMeetingState ? (
                 <ScrollArea className="h-[700px]">
                   <MeetingDetailView
-                    meetingId={selectedMeeting.id}
-                    initialMeeting={selectedMeeting}
+                    meetingId={selectedMeetingState.id}
+                    initialMeeting={selectedMeetingState}
                     embedded
                   />
                 </ScrollArea>
@@ -1293,8 +1607,8 @@ export function MeetingsWorkspaceView({
         </SheetContent>
       </Sheet>
       <MeetingInfoSheet
-        meeting={selectedMeeting}
-        open={showInfoSheet && Boolean(selectedMeeting)}
+        meeting={selectedMeetingState}
+        open={showInfoSheet && Boolean(selectedMeetingState)}
         onOpenChange={(open) => {
           if (open) {
             return
@@ -1307,7 +1621,6 @@ export function MeetingsWorkspaceView({
             params.set("meeting", selectedMeetingId)
           }
           router.replace(`/meetings?${params.toString()}`)
-          router.refresh()
         }}
       />
       <div className="pointer-events-none fixed bottom-4 right-4 z-[70] flex w-[min(92vw,420px)] flex-col items-end gap-2">
@@ -1386,10 +1699,28 @@ export function MeetingDetailView({
   }, [initialMeeting, speakerOverrides])
 
   const combinedMarkdown = useMemo(() => buildReadableMarkdown(meeting), [meeting])
+  const isMeetingProcessing =
+    isMeetingActiveStatus(meeting.status) || meeting.jobs.some((job) => isActiveJobStatus(job.status))
+  const hasMarkdownArtifacts =
+    Boolean(getArtifact(meeting, "meeting_summary")?.contentMd?.trim()) ||
+    Boolean(getArtifact(meeting, "meeting_protocol")?.contentMd?.trim()) ||
+    getActionsItems(meeting).length > 0 ||
+    Boolean(getArtifact(meeting, "meeting_actions")?.contentMd?.trim())
 
   useEffect(() => {
     setMarkdownDraft(combinedMarkdown)
   }, [combinedMarkdown])
+
+  useEffect(() => {
+    setSpeakerDrafts(
+      Object.fromEntries(
+        initialMeeting.speakers.map((speaker) => [
+          speaker.id,
+          speakerOverrides[speaker.id] ?? speaker.displayName,
+        ])
+      )
+    )
+  }, [initialMeeting, speakerOverrides])
 
   const handleSaveSpeaker = async (speaker: MeetingSpeakerRecord) => {
     const draft = speakerDrafts[speaker.id]?.trim()
@@ -1460,6 +1791,8 @@ export function MeetingDetailView({
           </Alert>
         ) : null}
 
+        {isMeetingProcessing ? <MeetingProcessingState meeting={meeting} /> : null}
+
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-col gap-3">
           <TabsList className="w-full justify-start overflow-x-auto">
             <TabsTrigger value="markdown">
@@ -1514,6 +1847,9 @@ export function MeetingDetailView({
               </CardHeader>
               <CardContent className="flex flex-col gap-3 p-3">
                 {markdownMode === "preview" ? (
+                  !hasMarkdownArtifacts && isMeetingProcessing ? (
+                    <MarkdownLoadingState />
+                  ) : (
                   <ScrollArea className="h-[560px] rounded-lg border bg-background p-4">
                     <div className="max-w-none">
                       <ReactMarkdown
@@ -1524,6 +1860,7 @@ export function MeetingDetailView({
                       </ReactMarkdown>
                     </div>
                   </ScrollArea>
+                  )
                 ) : (
                   <Textarea
                     value={markdownDraft}
@@ -1546,9 +1883,9 @@ export function MeetingDetailView({
               </CardHeader>
               <CardContent className="p-0">
                 <ScrollArea className="h-[620px]">
-                  <div className="flex flex-col gap-2 p-3">
-                    {meeting.segments.length > 0 ? (
-                      meeting.segments.map((segment) => (
+                  {meeting.segments.length > 0 ? (
+                    <div className="flex flex-col gap-2 p-3">
+                      {meeting.segments.map((segment) => (
                         <div
                           key={segment.id}
                           className="rounded-lg border bg-card px-3 py-2.5"
@@ -1566,15 +1903,19 @@ export function MeetingDetailView({
                             {segment.text || "—"}
                           </p>
                         </div>
-                      ))
-                    ) : (
+                      ))}
+                    </div>
+                  ) : isMeetingProcessing ? (
+                    <TranscriptLoadingState />
+                  ) : (
+                    <div className="flex flex-col gap-2 p-3">
                       <EmptyState
                         icon={FileTextIcon}
                         title="Транскрипт пока пуст"
                         description="Когда SaluteSpeech вернёт diarized segments, они появятся здесь."
                       />
-                    )}
-                  </div>
+                    </div>
+                  )}
                 </ScrollArea>
               </CardContent>
             </Card>
