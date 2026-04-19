@@ -84,7 +84,6 @@ import {
   type MeetingDetailRecord,
   type MeetingJobRecord,
   type MeetingListRecord,
-  type MeetingSpeakerRecord,
   type MeetingStageId,
   type MeetingStatus,
   type PaginatedMeetings,
@@ -1725,32 +1724,14 @@ export function MeetingDetailView({
     )
   }, [initialMeeting, speakerOverrides])
 
-  const handleSaveSpeaker = async (speaker: MeetingSpeakerRecord) => {
-    const draft = speakerDrafts[speaker.id]?.trim()
-    if (!draft || draft === speaker.displayName) {
-      return
-    }
-
-    setSavingSpeakerId(speaker.id)
-    setError(null)
-    try {
-      const updated = await updateMeetingSpeaker(meetingId, speaker.id, draft)
-      setSpeakerOverrides((current) => ({
-        ...current,
-        [updated.id]: updated.displayName,
-      }))
-      setSpeakerDrafts((current) => ({
-        ...current,
-        [updated.id]: updated.displayName,
-      }))
-    } catch (nextError) {
-      setError(
-        nextError instanceof Error ? nextError.message : "Не удалось сохранить спикера"
-      )
-    } finally {
-      setSavingSpeakerId(null)
-    }
-  }
+  const hasSpeakerChanges = useMemo(
+    () =>
+      meeting.speakers.some((speaker) => {
+        const draft = (speakerDrafts[speaker.id] ?? "").trim()
+        return draft.length > 0 && draft !== speaker.displayName
+      }),
+    [meeting.speakers, speakerDrafts]
+  )
 
   const handleCopyMarkdown = async () => {
     await navigator.clipboard.writeText(markdownDraft)
@@ -1768,6 +1749,30 @@ export function MeetingDetailView({
     setInfoMessage(null)
 
     try {
+      const changedSpeakers = meeting.speakers.filter((speaker) => {
+        const draft = (speakerDrafts[speaker.id] ?? "").trim()
+        return draft.length > 0 && draft !== speaker.displayName
+      })
+
+      for (const speaker of changedSpeakers) {
+        setSavingSpeakerId(speaker.id)
+        const updated = await updateMeetingSpeaker(
+          meetingId,
+          speaker.id,
+          (speakerDrafts[speaker.id] ?? "").trim()
+        )
+        setSpeakerOverrides((current) => ({
+          ...current,
+          [updated.id]: updated.displayName,
+        }))
+        setSpeakerDrafts((current) => ({
+          ...current,
+          [updated.id]: updated.displayName,
+        }))
+      }
+
+      setSavingSpeakerId(null)
+
       for (const stage of [
         "meeting_summary",
         "meeting_protocol",
@@ -1789,6 +1794,7 @@ export function MeetingDetailView({
           : "Не удалось запустить повторную генерацию материалов"
       )
     } finally {
+      setSavingSpeakerId(null)
       setIsRegeneratingMaterials(false)
     }
   }
@@ -1976,16 +1982,18 @@ export function MeetingDetailView({
                   <Button
                     variant="outline"
                     onClick={() => void handleRegenerateMaterials()}
-                    disabled={isRegeneratingMaterials || isMeetingProcessing}
+                    disabled={isRegeneratingMaterials || isMeetingProcessing || savingSpeakerId !== null}
                   >
                     {isRegeneratingMaterials ? (
                       <Loader2Icon data-icon="inline-start" className="animate-spin" />
                     ) : (
-                      <WandSparklesIcon data-icon="inline-start" />
+                      <SaveIcon data-icon="inline-start" />
                     )}
                     {isRegeneratingMaterials
-                      ? "Запускаем пересборку..."
-                      : "Переформировать материалы"}
+                      ? "Сохраняем и запускаем пересборку..."
+                      : hasSpeakerChanges
+                        ? "Сохранить и переформировать материалы"
+                        : "Переформировать материалы"}
                   </Button>
                 </div>
               </CardHeader>
@@ -1995,7 +2003,6 @@ export function MeetingDetailView({
                     <TableRow>
                       <TableHead>Label</TableHead>
                       <TableHead>Отображаемое имя</TableHead>
-                      <TableHead />
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -2020,20 +2027,6 @@ export function MeetingDetailView({
                               }
                             />
                           </div>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Button
-                            variant="outline"
-                            onClick={() => void handleSaveSpeaker(speaker)}
-                            disabled={savingSpeakerId === speaker.id}
-                          >
-                            {savingSpeakerId === speaker.id ? (
-                              <Loader2Icon data-icon="inline-start" className="animate-spin" />
-                            ) : (
-                              <SaveIcon data-icon="inline-start" />
-                            )}
-                            Сохранить
-                          </Button>
                         </TableCell>
                       </TableRow>
                     ))}
