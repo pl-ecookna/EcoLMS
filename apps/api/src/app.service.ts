@@ -123,8 +123,24 @@ export class AppService {
     return ""
   }
 
+  private normalizeBasicAuthValue(value: string) {
+    let candidate = value.trim()
+    if (!candidate) {
+      return ""
+    }
+    if (candidate.toLowerCase().startsWith("basic ")) {
+      candidate = candidate.slice(6).trim()
+    }
+    if (candidate.includes(":")) {
+      return Buffer.from(candidate, "utf-8").toString("base64")
+    }
+    return candidate
+  }
+
   private resolveSaluteSpeechAuthConfig() {
-    const authKey = this.firstDefinedEnv("SALUTESPEECH_AUTH_KEY", "SBER_AUTH_KEY")
+    const authKey = this.normalizeBasicAuthValue(
+      this.firstDefinedEnv("SALUTESPEECH_AUTH_KEY", "SBER_AUTH_KEY")
+    )
     const clientId = this.firstDefinedEnv("SALUTESPEECH_CLIENT_ID", "SBER_CLIENT_ID")
     const clientSecret = this.firstDefinedEnv(
       "SALUTESPEECH_CLIENT_SECRET",

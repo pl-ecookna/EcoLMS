@@ -191,6 +191,8 @@ Browser
 Для обратной совместимости `api` и `worker` также понимают старые алиасы `SBER_*`
 и могут собрать OAuth Basic key из `SBER_CLIENT_ID` + `SBER_CLIENT_SECRET`, если
 `SALUTESPEECH_AUTH_KEY` не задан.
+`SALUTESPEECH_AUTH_KEY` допускает три формата: готовый base64, строку
+`client_id:client_secret` или значение с префиксом `Basic `.
 
 Если используется `SALUTESPEECH_CA_CERT_PATH=certs/russiantrustedca.pem`, каталог
 `certs/` должен быть скопирован в runtime-образ `worker`, иначе этап

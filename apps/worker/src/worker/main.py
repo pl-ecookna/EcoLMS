@@ -112,8 +112,21 @@ def first_defined_env(*names: str) -> str:
     return ""
 
 
+def normalize_basic_auth_value(value: str) -> str:
+    candidate = value.strip()
+    if not candidate:
+        return ""
+    if candidate.lower().startswith("basic "):
+        candidate = candidate[6:].strip()
+    if ":" in candidate:
+        return base64.b64encode(candidate.encode("utf-8")).decode("ascii")
+    return candidate
+
+
 def resolve_salutespeech_auth_key() -> str:
-    auth_key = first_defined_env("SALUTESPEECH_AUTH_KEY", "SBER_AUTH_KEY")
+    auth_key = normalize_basic_auth_value(
+        first_defined_env("SALUTESPEECH_AUTH_KEY", "SBER_AUTH_KEY")
+    )
     if auth_key:
         return auth_key
 
