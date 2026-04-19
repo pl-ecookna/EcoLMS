@@ -582,6 +582,22 @@ export async function startMeeting(meetingId: string) {
   )
 }
 
+export async function generateMeetingStage(
+  meetingId: string,
+  input: {
+    stage: Exclude<MeetingStageId, "audio_prepared">
+    overwriteExisting?: boolean
+  }
+) {
+  return requestJson<{ meeting: MeetingDetailRecord; job: MeetingJobRecord }>(
+    `/api/meetings/${meetingId}/generate`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    }
+  )
+}
+
 export async function deleteMeeting(meetingId: string) {
   return requestJson<{ id: string; deleted: true }>(`/api/meetings/${meetingId}`, {
     method: "DELETE",

@@ -95,6 +95,7 @@ import {
   completeMeetingUpload,
   createMeeting,
   deleteMeeting,
+  generateMeetingStage,
   getSystemHealth,
   getMeeting,
   initMeetingUpload,
@@ -1669,10 +1670,12 @@ export function MeetingDetailView({
   )
   const [speakerOverrides, setSpeakerOverrides] = useState<Record<string, string>>({})
   const [savingSpeakerId, setSavingSpeakerId] = useState<string | null>(null)
+  const [isRegeneratingMaterials, setIsRegeneratingMaterials] = useState(false)
   const [copied, setCopied] = useState(false)
   const [markdownMode, setMarkdownMode] = useState<"preview" | "edit">("preview")
   const [markdownDraft, setMarkdownDraft] = useState("")
   const [error, setError] = useState<string | null>(null)
+  const [infoMessage, setInfoMessage] = useState<string | null>(null)
 
   const meeting = useMemo(() => {
     const speakerNames = new Map(
@@ -1759,6 +1762,37 @@ export function MeetingDetailView({
     downloadText(`${meeting.title}.md`, markdownDraft)
   }
 
+  const handleRegenerateMaterials = async () => {
+    setIsRegeneratingMaterials(true)
+    setError(null)
+    setInfoMessage(null)
+
+    try {
+      for (const stage of [
+        "meeting_summary",
+        "meeting_protocol",
+        "meeting_actions",
+      ] as const) {
+        await generateMeetingStage(meetingId, {
+          stage,
+          overwriteExisting: true,
+        })
+      }
+
+      setInfoMessage(
+        "Материалы отправлены на повторную генерацию. Сводка, протокол и поручения обновятся автоматически."
+      )
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error
+          ? nextError.message
+          : "Не удалось запустить повторную генерацию материалов"
+      )
+    } finally {
+      setIsRegeneratingMaterials(false)
+    }
+  }
+
   return (
     <div
       className={
@@ -1788,6 +1822,14 @@ export function MeetingDetailView({
             <XCircleIcon />
             <AlertTitle>Не удалось сохранить спикера</AlertTitle>
             <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : null}
+
+        {infoMessage ? (
+          <Alert>
+            <InfoIcon />
+            <AlertTitle>Материалы обновляются</AlertTitle>
+            <AlertDescription>{infoMessage}</AlertDescription>
           </Alert>
         ) : null}
 
@@ -1924,10 +1966,28 @@ export function MeetingDetailView({
           <TabsContent value="speakers" className="space-y-3">
             <Card>
               <CardHeader className="border-b px-4 py-3">
-                <CardTitle>Ручная правка speaker labels</CardTitle>
-                <CardDescription>
-                  Можно переименовать любой label в понятное пользователю имя.
-                </CardDescription>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <CardTitle>Ручная правка speaker labels</CardTitle>
+                    <CardDescription>
+                      Можно переименовать любой label в понятное пользователю имя.
+                    </CardDescription>
+                  </div>
+                  <Button
+                    variant="outline"
+                    onClick={() => void handleRegenerateMaterials()}
+                    disabled={isRegeneratingMaterials || isMeetingProcessing}
+                  >
+                    {isRegeneratingMaterials ? (
+                      <Loader2Icon data-icon="inline-start" className="animate-spin" />
+                    ) : (
+                      <WandSparklesIcon data-icon="inline-start" />
+                    )}
+                    {isRegeneratingMaterials
+                      ? "Запускаем пересборку..."
+                      : "Переформировать материалы"}
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent className="p-0">
                 <Table>
