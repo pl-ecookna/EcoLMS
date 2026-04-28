@@ -101,6 +101,7 @@ Browser
 
 Актуальные маршруты и схема данных описаны в:
 
+- [doc/Документация_для_заказчика.md](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/doc/Документация_для_заказчика.md)
 - [doc/API_описание.md](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/doc/API_описание.md)
 - [doc/DB_схема.md](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/doc/DB_схема.md)
 - [doc/Архитектура_AI_ассистент_для_создания_обучающих_курсов.md](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/doc/Архитектура_AI_ассистент_для_создания_обучающих_курсов.md)

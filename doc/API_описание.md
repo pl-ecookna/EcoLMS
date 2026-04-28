@@ -9,7 +9,7 @@
 ### Health
 
 - `GET /api/health`
-  Возвращает сводку по `api`, `postgres`, `redis`, `openai`, `worker`, `transcriptionService`, а также счётчики проектов и upload-сессий.
+  Возвращает сводку по `api`, `postgres`, `redis`, `llm`, `salutespeech`, `worker`, `transcriptionService`, а также счётчики проектов и upload-сессий.
 
 ### Projects
 

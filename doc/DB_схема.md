@@ -214,6 +214,13 @@
 - `mime_type` `text`
 - `size_bytes` `bigint`
 
+Допустимые `status`:
+
+- `initiated`
+- `uploading`
+- `completed`
+- `aborted`
+
 ## Таблица `meeting_jobs`
 
 - `id` `text`, PK
@@ -235,6 +242,13 @@
 - `meeting_protocol`
 - `meeting_actions`
 
+Допустимые `status`:
+
+- `queued`
+- `processing`
+- `done`
+- `failed`
+
 ## Таблица `meeting_speakers`
 
 - `id` `text`, PK
@@ -245,6 +259,10 @@
 - `sort_order` `integer`
 - `created_at` `timestamptz`
 - `updated_at` `timestamptz`
+
+Ограничение:
+
+- `UNIQUE (meeting_id, speaker_label)`
 
 ## Таблица `meeting_speaker_segments`
 
@@ -259,6 +277,11 @@
 - `provider_payload_json` `jsonb`
 - `created_at` `timestamptz`
 
+Индексы:
+
+- `(meeting_id, start_ms)`
+- `(meeting_id, speaker_label)`
+
 ## Таблица `meeting_artifacts`
 
 - `id` `text`, PK
@@ -269,3 +292,19 @@
 - `content_json` `jsonb`
 - `created_at` `timestamptz`
 - `updated_at` `timestamptz`
+
+Допустимые `stage`:
+
+- `transcript_compiled`
+- `meeting_summary`
+- `meeting_protocol`
+- `meeting_actions`
+
+Допустимые `format`:
+
+- `md`
+- `json`
+
+Ограничение:
+
+- `UNIQUE (meeting_id, stage, format)`
