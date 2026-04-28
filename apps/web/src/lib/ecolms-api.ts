@@ -5,11 +5,27 @@ export const stageOrder = [
   "course_test",
 ] as const
 
+export const meetingStageOrder = [
+  "audio_prepared",
+  "transcript_compiled",
+  "meeting_summary",
+  "meeting_protocol",
+  "meeting_actions",
+] as const
+
 export const stageLabels: Record<StageId, string> = {
   source_compiled: "Источник",
   course_outline: "План курса",
   course_content: "Обучающие материалы",
   course_test: "Тест",
+}
+
+export const meetingStageLabels: Record<MeetingStageId, string> = {
+  audio_prepared: "Аудио",
+  transcript_compiled: "Транскрипт",
+  meeting_summary: "Сводка",
+  meeting_protocol: "Протокол",
+  meeting_actions: "Действия",
 }
 
 export const projectStatusLabels: Record<ProjectStatus, string> = {
@@ -21,6 +37,7 @@ export const projectStatusLabels: Record<ProjectStatus, string> = {
 }
 
 export type StageId = (typeof stageOrder)[number]
+export type MeetingStageId = (typeof meetingStageOrder)[number]
 export type ProjectStatus =
   | "draft"
   | "uploaded"
@@ -30,6 +47,8 @@ export type ProjectStatus =
 export type JobStatus = "queued" | "processing" | "done" | "failed"
 export type UploadStatus = "initiated" | "uploading" | "completed" | "aborted"
 export type ArtifactFormat = "md" | "json"
+export type MeetingStatus = "draft" | "uploaded" | "processing" | "completed" | "failed"
+export type PromptModule = "lms" | "meetings"
 
 export type ApiEnvelope<T> = {
   success: boolean
@@ -186,7 +205,8 @@ export interface SystemHealthRecord {
     api: ServiceHealthState
     postgres: ServiceHealthState
     redis: ServiceHealthState
-    openai: ServiceHealthState
+    llm: ServiceHealthState
+    salutespeech: ServiceHealthState
     worker: ServiceHealthState
     transcriptionService: ServiceHealthState
   }
@@ -194,6 +214,115 @@ export interface SystemHealthRecord {
     projects: number
     uploads: number
   }
+}
+
+export interface PromptRecord {
+  module: PromptModule
+  promptKey: string
+  title: string
+  systemPrompt: string
+  userPromptTemplate: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface MeetingSourceFileRecord {
+  id: string
+  meetingId: string
+  originalName: string
+  mimeType: string
+  sizeBytes: number
+  storageKey: string
+  uploadStatus: UploadStatus
+  processingStatus: JobStatus | "pending"
+  durationSeconds: number | null
+  audioStorageKey: string | null
+  audioMimeType: string | null
+  createdAt: string
+}
+
+export interface MeetingJobRecord {
+  id: string
+  meetingId: string
+  stage: MeetingStageId
+  status: JobStatus
+  payloadJson: Record<string, unknown>
+  resultJson: Record<string, unknown> | null
+  errorText: string | null
+  startedAt: string | null
+  finishedAt: string | null
+  createdAt: string
+}
+
+export interface MeetingSpeakerRecord {
+  id: string
+  meetingId: string
+  speakerLabel: string
+  displayName: string
+  isUserEdited: boolean
+  sortOrder: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface MeetingSpeakerSegmentRecord {
+  id: number
+  meetingId: string
+  speakerId: string | null
+  speakerLabel: string
+  displayName: string
+  startMs: number
+  endMs: number
+  text: string
+  confidence: number | null
+  providerPayloadJson: Record<string, unknown>
+  createdAt: string
+}
+
+export interface MeetingArtifactRecord {
+  id: string
+  meetingId: string
+  stage: MeetingStageId
+  format: ArtifactFormat
+  contentMd: string
+  contentJson: Record<string, unknown>
+  createdAt: string
+  updatedAt: string
+}
+
+export interface MeetingRecord {
+  id: string
+  title: string
+  description: string
+  status: MeetingStatus
+  language: "ru"
+  durationSeconds: number | null
+  speakersCount: number
+  processingStartedAt: string | null
+  processingFinishedAt: string | null
+  errorText: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface MeetingListRecord extends MeetingRecord {
+  sourceFile: MeetingSourceFileRecord | null
+}
+
+export interface MeetingDetailRecord extends MeetingRecord {
+  sourceFile: MeetingSourceFileRecord | null
+  speakers: MeetingSpeakerRecord[]
+  segments: MeetingSpeakerSegmentRecord[]
+  jobs: MeetingJobRecord[]
+  artifacts: MeetingArtifactRecord[]
+}
+
+export interface PaginatedMeetings {
+  items: MeetingListRecord[]
+  total: number
+  page: number
+  limit: number
+  totalPages: number
 }
 
 const DEFAULT_HEADERS = {
@@ -298,6 +427,26 @@ export async function getSystemHealth() {
   return requestJson<SystemHealthRecord>(`/api/health`)
 }
 
+export async function listPrompts(module?: PromptModule) {
+  const suffix = module ? `?module=${module}` : ""
+  return requestJson<PromptRecord[]>(`/api/prompts${suffix}`)
+}
+
+export async function updatePrompt(
+  module: PromptModule,
+  promptKey: string,
+  input: {
+    title?: string
+    systemPrompt?: string
+    userPromptTemplate?: string
+  }
+) {
+  return requestJson<PromptRecord>(`/api/prompts/${module}/${promptKey}`, {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  })
+}
+
 export async function initUpload(
   projectId: string,
   input: {
@@ -374,4 +523,125 @@ export async function retryJob(projectId: string, jobId: string) {
 
 export async function downloadProject(projectId: string) {
   return requestJson<DownloadItem[]>(`/api/projects/${projectId}/download`)
+}
+
+export async function listMeetings(page: number, limit: number) {
+  return requestJson<PaginatedMeetings>(`/api/meetings?page=${page}&limit=${limit}`)
+}
+
+export async function createMeeting(input: { title?: string; description?: string }) {
+  return requestJson<MeetingDetailRecord>(`/api/meetings`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  })
+}
+
+export async function getMeeting(meetingId: string) {
+  return requestJson<MeetingDetailRecord>(`/api/meetings/${meetingId}`)
+}
+
+export async function initMeetingUpload(
+  meetingId: string,
+  input: {
+    fileName: string
+    fileSize: number
+    mimeType: string
+  }
+) {
+  return requestJson<UploadInitResponse>(`/api/meetings/${meetingId}/uploads/init`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  })
+}
+
+export async function signMeetingUploadPart(uploadId: string, partNumber: number) {
+  return requestJson<SignedUploadPart>(`/api/meeting-uploads/${uploadId}/parts/sign`, {
+    method: "POST",
+    body: JSON.stringify({ partNumber }),
+  })
+}
+
+export async function completeMeetingUpload(uploadId: string) {
+  return requestJson<CompletedUpload>(`/api/meeting-uploads/${uploadId}/complete`, {
+    method: "POST",
+  })
+}
+
+export async function abortMeetingUpload(uploadId: string) {
+  return requestJson<AbortedUpload>(`/api/meeting-uploads/${uploadId}/abort`, {
+    method: "POST",
+  })
+}
+
+export async function startMeeting(meetingId: string) {
+  return requestJson<{ meeting: MeetingDetailRecord; job: MeetingJobRecord }>(
+    `/api/meetings/${meetingId}/start`,
+    {
+      method: "POST",
+    }
+  )
+}
+
+export async function generateMeetingStage(
+  meetingId: string,
+  input: {
+    stage: Exclude<MeetingStageId, "audio_prepared">
+    overwriteExisting?: boolean
+  }
+) {
+  return requestJson<{ meeting: MeetingDetailRecord; job: MeetingJobRecord }>(
+    `/api/meetings/${meetingId}/generate`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    }
+  )
+}
+
+export async function deleteMeeting(meetingId: string) {
+  return requestJson<{ id: string; deleted: true }>(`/api/meetings/${meetingId}`, {
+    method: "DELETE",
+  })
+}
+
+export async function getMeetingTranscript(meetingId: string) {
+  return requestJson<{
+    meetingId: string
+    speakers: MeetingSpeakerRecord[]
+    segments: MeetingSpeakerSegmentRecord[]
+  }>(`/api/meetings/${meetingId}/transcript`)
+}
+
+export async function updateMeetingSpeaker(
+  meetingId: string,
+  speakerId: string,
+  displayName: string
+) {
+  return requestJson<MeetingSpeakerRecord>(
+    `/api/meetings/${meetingId}/speakers/${speakerId}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ displayName }),
+    }
+  )
+}
+
+export async function listMeetingArtifacts(meetingId: string) {
+  return requestJson<MeetingArtifactRecord[]>(`/api/meetings/${meetingId}/artifacts`)
+}
+
+export async function listMeetingJobs(meetingId: string) {
+  return requestJson<MeetingJobRecord[]>(`/api/meetings/${meetingId}/jobs`)
+}
+
+export async function downloadMeeting(meetingId: string) {
+  return requestJson<
+    Array<{
+      id: string
+      type: MeetingStageId
+      format: ArtifactFormat
+      fileName: string
+      downloadUrl: string
+    }>
+  >(`/api/meetings/${meetingId}/download`)
 }

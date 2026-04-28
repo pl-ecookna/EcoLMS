@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState, type DragEvent } from "react"
+import Link from "next/link"
 import {
   ActivityIcon,
   AlertCircleIcon,
@@ -9,6 +10,7 @@ import {
   FileTextIcon,
   PencilIcon,
   Loader2Icon,
+  MicIcon,
   MoreHorizontalIcon,
   PlusIcon,
   ServerCogIcon,
@@ -315,8 +317,11 @@ function serviceKindIcon(serviceKey: string) {
   if (serviceKey === "redis") {
     return <ServerCogIcon className="size-4 text-muted-foreground" />
   }
-  if (serviceKey === "openai") {
+  if (serviceKey === "llm") {
     return <SparklesIcon className="size-4 text-muted-foreground" />
+  }
+  if (serviceKey === "salutespeech") {
+    return <MicIcon className="size-4 text-muted-foreground" />
   }
   if (serviceKey === "worker") {
     return <ActivityIcon className="size-4 text-muted-foreground" />
@@ -406,7 +411,6 @@ export function EcolmsDashboard() {
   const currentStageArtifact = getStageArtifact(selectedProject, selectedStage)
   const currentStageSourceValue = getStageMarkdown(selectedProject, selectedStage)
   const hasUnsavedChanges = Boolean(currentStageArtifact) && editorValue !== currentStageSourceValue
-
   function dismissAlert(id: string) {
     setAlerts((current) => current.filter((item) => item.id !== id))
   }
@@ -1038,7 +1042,12 @@ export function EcolmsDashboard() {
     { key: "api", title: "API", state: systemHealth?.services.api ?? null },
     { key: "postgres", title: "Postgres", state: systemHealth?.services.postgres ?? null },
     { key: "redis", title: "Redis", state: systemHealth?.services.redis ?? null },
-    { key: "openai", title: "OpenAI", state: systemHealth?.services.openai ?? null },
+    { key: "llm", title: "LLM", state: systemHealth?.services.llm ?? null },
+    {
+      key: "salutespeech",
+      title: "SaluteSpeech",
+      state: systemHealth?.services.salutespeech ?? null,
+    },
     { key: "worker", title: "Worker", state: systemHealth?.services.worker ?? null },
     {
       key: "transcriptionService",
@@ -1163,6 +1172,18 @@ export function EcolmsDashboard() {
                 </div>
               </HoverCardContent>
             </HoverCard>
+            <div className="flex items-center gap-2">
+              <Link
+                href="/prompts?module=lms&from=lms"
+                className={buttonVariants({ variant: "outline", size: "sm" })}
+              >
+                <PencilIcon data-icon="inline-start" />
+                Промпты
+              </Link>
+              <Link href="/meetings" className={buttonVariants({ variant: "outline", size: "sm" })}>
+                Модуль встреч
+              </Link>
+            </div>
           </header>
 
           {listError ? (
@@ -1949,7 +1970,6 @@ export function EcolmsDashboard() {
           </SheetFooter>
         </SheetContent>
       </Sheet>
-
       <div className="pointer-events-none fixed bottom-4 right-4 z-[70] flex w-[min(92vw,420px)] flex-col items-end gap-2">
         {alerts.map((item) => (
           <Alert

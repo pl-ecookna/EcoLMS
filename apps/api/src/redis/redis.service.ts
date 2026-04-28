@@ -8,7 +8,20 @@ export type ProcessingJobMessage = {
   trigger: "start" | "manual" | "auto" | "retry"
 }
 
+export type MeetingJobMessage = {
+  jobId: string
+  meetingId: string
+  stage:
+    | "audio_prepared"
+    | "transcript_compiled"
+    | "meeting_summary"
+    | "meeting_protocol"
+    | "meeting_actions"
+  trigger: "start" | "manual" | "retry"
+}
+
 const JOB_QUEUE_KEY = "ecolms:processing-jobs"
+const MEETING_JOB_QUEUE_KEY = "ecolms:meeting-jobs"
 const INTERNAL_REDIS_URL =
   "redis://redis:6379"
 const EXTERNAL_REDIS_URL =
@@ -211,6 +224,14 @@ export class RedisQueueService {
     await runRedisCommand(this.redisUrl, [
       "LPUSH",
       JOB_QUEUE_KEY,
+      JSON.stringify(message),
+    ])
+  }
+
+  async enqueueMeetingJob(message: MeetingJobMessage) {
+    await runRedisCommand(this.redisUrl, [
+      "LPUSH",
+      MEETING_JOB_QUEUE_KEY,
       JSON.stringify(message),
     ])
   }

@@ -16,6 +16,181 @@ const stageOrder: StageId[] = [
   "course_test",
 ]
 
+const DEFAULT_PROMPT_SEEDS = [
+  {
+    module: "lms",
+    promptKey: "analize_video",
+    title: "Извлечение полезного контента из видео",
+    systemPrompt: `Ты — специалист по извлечению и структурированию технического контента из видеофайлов.
+
+Задача:
+1. Выделить практически полезную информацию для создания обучающих материалов, исключив вспомогательную и общую информацию.
+2. Подготовить сырую транскрипцию видео без редактирования.
+3. Вернуть JSON с полями \`summary\` и \`transcript\`.
+
+Приоритетный контент:
+- технические характеристики и параметры;
+- требования, стандарты, допуски;
+- пошаговые инструкции и алгоритмы;
+- описания конструкций и принципов работы;
+- технологии выполнения операций;
+- меры безопасности;
+- критерии качества и способы проверки;
+- типичные ошибки и способы устранения;
+- перечни инструментов и материалов;
+- профессиональные термины;
+- нормативные ссылки;
+- численные данные, формулы, расчёты.
+
+Исключай:
+- контактную информацию;
+- вводные, приветствия и организационные комментарии;
+- юридические и маркетинговые блоки.
+
+Формат вывода: JSON, где \`summary\` — одна строка без временных меток, а \`transcript\` — полный необработанный текст видео.`,
+    userPromptTemplate:
+      "Проанализируй {source_type} и верни только JSON с полями summary и transcript. Поле transcript должно содержать очищенный исходный текст без выдуманных данных.",
+  },
+  {
+    module: "lms",
+    promptKey: "analize_doc",
+    title: "Извлечение полезного контента из документов",
+    systemPrompt: `Ты — специалист по извлечению и структурированию технического контента из презентаций и текстовых материалов.
+
+Задача:
+1. Выделить практически полезную информацию для создания обучающих материалов.
+2. Сохранить только значимые сведения, которые пригодятся для разработки курса.
+
+Приоритетный контент:
+- технические характеристики и параметры;
+- стандарты, допуски, нормативы;
+- пошаговые инструкции и методики;
+- конструкции, принципы работы и технологии;
+- требования безопасности;
+- критерии качества;
+- типичные ошибки и способы устранения;
+- инструменты, материалы, термины;
+- численные данные и расчёты.
+
+Исключай:
+- контакты, реквизиты, внешние ссылки;
+- вводные и организационные блоки;
+- юридическую и маркетинговую информацию.
+
+Сохраняй оригинальную терминологию, численные значения и только факты, относящиеся к теме обучения.`,
+    userPromptTemplate:
+      "Проанализируй {source_type} и верни только JSON с полями summary и transcript. Поле transcript должно содержать очищенный исходный текст без выдуманных данных.",
+  },
+  {
+    module: "lms",
+    promptKey: "generate_plan",
+    title: "Генерация структуры курса",
+    systemPrompt: `Ты — методист корпоративного учебного центра.
+
+Задача — создать структуру обучающего курса только на основе предоставленных материалов.
+
+Правила:
+- используй только информацию из исходного текста;
+- не добавляй темы, процедуры и характеристики, которых нет в материалах;
+- не включай разделы, если данных недостаточно;
+- максимум 10 основных разделов;
+- выстраивай структуру от теории к практике.
+
+Формат ответа:
+- название курса;
+- тип продукции или системы;
+- целевая аудитория;
+- список разделов с кратким описанием;
+- практический результат по каждому разделу;
+- ключевые навыки после обучения.`,
+    userPromptTemplate:
+      "Сгенерируй итоговый markdown для этапа курса. Используй только данные из sourceText, без выдуманных деталей.",
+  },
+  {
+    module: "lms",
+    promptKey: "generate_materials",
+    title: "Генерация учебных материалов",
+    systemPrompt: `Ты — методолог профессионального обучения, создающий онлайн-курсы для технической аудитории.
+
+Задача — разработать подробные учебные материалы на основе исходного текста (структурированного источника) и утверждённого плана.
+
+Ключевые ограничения:
+- использовать только информацию из предоставленных данных;
+- строго следовать структуре плана;
+- не придумывать детали и не дополнять материал внешними знаниями;
+- при нехватке данных явно отмечать пробелы и недостающую информацию.
+
+Структура раздела:
+- цели обучения;
+- теоретическая часть;
+- технические требования;
+- пошаговая инструкция;
+- инструменты и материалы;
+- контроль качества;
+- требования безопасности;
+- важные предупреждения;
+- справочная информация.
+
+Материал должен быть практичным, структурированным и удобным для изучения.`,
+    userPromptTemplate:
+      "Сгенерируй итоговый markdown для этапа курса. Используй только данные из sourceText, без выдуманных деталей.",
+  },
+  {
+    module: "lms",
+    promptKey: "generate_test",
+    title: "Генерация проверочного теста",
+    systemPrompt: `Ты — методолог профессионального образования.
+
+Составь проверочный тест по обучающим материалам с опорой на исходный текст.
+
+Требования:
+- 10 вопросов;
+- формат множественного выбора;
+- у каждого вопроса 3–5 вариантов ответа;
+- ровно один правильный вариант;
+- правильный ответ явно отмечен.
+
+Ограничения:
+- использовать только сведения из предоставленных материалов и исходного текста;
+- каждый вопрос обязан проверять тему, уже раскрытую в обучающих материалах;
+- нельзя добавлять вопросы по темам, которых нет в материалах;
+- формулировки вопросов можно перефразировать, но смысл должен совпадать с материалами;
+- не дополнять вопрос внешними знаниями;
+- если данных недостаточно, вопрос не придумывать.
+
+Формат ответа: пронумерованный список вопросов с вариантами ответа.`,
+    userPromptTemplate:
+      "Сгенерируй итоговый markdown для этапа курса. Используй только данные из sourceText, без выдуманных деталей.",
+  },
+  {
+    module: "meetings",
+    promptKey: "meeting_summary",
+    title: "Краткая сводка встречи",
+    systemPrompt:
+      "Ты анализируешь русскоязычные встречи. Используй только факты из transcript. Не придумывай имена, сроки, решения и поручения, которых нет в тексте.",
+    userPromptTemplate:
+      "Сформируй краткое summary встречи на русском языке. Верни только JSON с полями markdown и shortSummary. Используй только данные из transcript, ничего не выдумывай.",
+  },
+  {
+    module: "meetings",
+    promptKey: "meeting_protocol",
+    title: "Протокол встречи",
+    systemPrompt:
+      "Ты анализируешь русскоязычные встречи. Используй только факты из transcript. Не придумывай имена, сроки, решения и поручения, которых нет в тексте.",
+    userPromptTemplate:
+      "Сформируй протокол встречи на русском языке. Верни только JSON с полями markdown и shortSummary. Используй только данные из transcript, ничего не выдумывай.",
+  },
+  {
+    module: "meetings",
+    promptKey: "meeting_actions",
+    title: "Поручения и решения по встрече",
+    systemPrompt:
+      "Ты анализируешь русскоязычные встречи. Используй только факты из transcript. Не придумывай имена, сроки, решения и поручения, которых нет в тексте.",
+    userPromptTemplate:
+      "Сформируй структурированные результаты встречи на русском языке. Верни только JSON с полями markdown, shortSummary, decisions, actionItems, openQuestions. Для actionItems указывай assignee и deadline только если они явно прозвучали. Для actionItems по возможности указывай sourceSegmentIds как массив segment_id из transcript.",
+  },
+] as const
+
 const logger = new Logger("PostgresService")
 
 const INTERNAL_POSTGRES_URL =
@@ -151,6 +326,137 @@ CREATE TABLE IF NOT EXISTS stage_reviews (
 
 CREATE INDEX IF NOT EXISTS stage_reviews_project_stage_idx
   ON stage_reviews (project_id, stage);
+
+CREATE TABLE IF NOT EXISTS meetings (
+  id text PRIMARY KEY,
+  title text NOT NULL,
+  description text NOT NULL DEFAULT '',
+  status text NOT NULL CHECK (status IN ('draft', 'uploaded', 'processing', 'completed', 'failed')),
+  language text NOT NULL DEFAULT 'ru' CHECK (language IN ('ru')),
+  duration_seconds integer NULL,
+  speakers_count integer NOT NULL DEFAULT 0 CHECK (speakers_count >= 0),
+  processing_started_at timestamptz NULL,
+  processing_finished_at timestamptz NULL,
+  error_text text NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS meeting_source_files (
+  id text PRIMARY KEY,
+  meeting_id text NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  original_name text NOT NULL,
+  mime_type text NOT NULL,
+  size_bytes bigint NOT NULL CHECK (size_bytes >= 0),
+  storage_key text NOT NULL,
+  upload_status text NOT NULL CHECK (upload_status IN ('initiated', 'uploading', 'completed', 'aborted')),
+  processing_status text NOT NULL CHECK (processing_status IN ('pending', 'queued', 'processing', 'done', 'failed')),
+  duration_seconds integer NULL,
+  audio_storage_key text NULL,
+  audio_mime_type text NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (meeting_id)
+);
+
+CREATE TABLE IF NOT EXISTS meeting_upload_sessions (
+  id text PRIMARY KEY,
+  meeting_id text NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  source_file_id text NOT NULL REFERENCES meeting_source_files(id) ON DELETE CASCADE,
+  s3_upload_id text NOT NULL,
+  status text NOT NULL CHECK (status IN ('initiated', 'uploading', 'completed', 'aborted')),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  completed_at timestamptz NULL,
+  bucket text NOT NULL,
+  storage_key text NOT NULL,
+  original_name text NOT NULL,
+  mime_type text NOT NULL,
+  size_bytes bigint NOT NULL CHECK (size_bytes >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS meeting_upload_sessions_meeting_status_idx
+  ON meeting_upload_sessions (meeting_id, status);
+
+CREATE TABLE IF NOT EXISTS meeting_jobs (
+  id text PRIMARY KEY,
+  meeting_id text NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  stage text NOT NULL CHECK (stage IN ('audio_prepared', 'transcript_compiled', 'meeting_summary', 'meeting_protocol', 'meeting_actions')),
+  status text NOT NULL CHECK (status IN ('queued', 'processing', 'done', 'failed')),
+  payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  result_json jsonb NULL,
+  error_text text NULL,
+  started_at timestamptz NULL,
+  finished_at timestamptz NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS meeting_jobs_meeting_created_idx
+  ON meeting_jobs (meeting_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS meeting_jobs_meeting_stage_status_idx
+  ON meeting_jobs (meeting_id, stage, status);
+
+CREATE TABLE IF NOT EXISTS meeting_speakers (
+  id text PRIMARY KEY,
+  meeting_id text NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  speaker_label text NOT NULL,
+  display_name text NOT NULL,
+  is_user_edited boolean NOT NULL DEFAULT false,
+  sort_order integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (meeting_id, speaker_label)
+);
+
+CREATE INDEX IF NOT EXISTS meeting_speakers_meeting_sort_idx
+  ON meeting_speakers (meeting_id, sort_order);
+
+CREATE TABLE IF NOT EXISTS meeting_speaker_segments (
+  id bigserial PRIMARY KEY,
+  meeting_id text NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  speaker_id text NULL REFERENCES meeting_speakers(id) ON DELETE SET NULL,
+  speaker_label text NOT NULL,
+  start_ms integer NOT NULL CHECK (start_ms >= 0),
+  end_ms integer NOT NULL CHECK (end_ms >= start_ms),
+  text text NOT NULL,
+  confidence numeric NULL,
+  provider_payload_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS meeting_segments_meeting_start_idx
+  ON meeting_speaker_segments (meeting_id, start_ms);
+
+CREATE INDEX IF NOT EXISTS meeting_segments_meeting_speaker_idx
+  ON meeting_speaker_segments (meeting_id, speaker_label);
+
+CREATE TABLE IF NOT EXISTS meeting_artifacts (
+  id text PRIMARY KEY,
+  meeting_id text NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+  stage text NOT NULL CHECK (stage IN ('transcript_compiled', 'meeting_summary', 'meeting_protocol', 'meeting_actions')),
+  format text NOT NULL CHECK (format IN ('md', 'json')),
+  content_md text NOT NULL DEFAULT '',
+  content_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (meeting_id, stage, format)
+);
+
+CREATE INDEX IF NOT EXISTS meeting_artifacts_meeting_stage_format_idx
+  ON meeting_artifacts (meeting_id, stage, format);
+
+CREATE TABLE IF NOT EXISTS llm_prompts (
+  module text NOT NULL CHECK (module IN ('lms', 'meetings')),
+  prompt_key text NOT NULL,
+  title text NOT NULL,
+  system_prompt text NOT NULL,
+  user_prompt_template text NOT NULL DEFAULT '',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (module, prompt_key)
+);
+
+CREATE INDEX IF NOT EXISTS llm_prompts_module_idx
+  ON llm_prompts (module, prompt_key);
 `
 
 function progressForStage(stage: StageId, status: ProjectStatus) {
@@ -266,6 +572,7 @@ export class PostgresService implements OnModuleInit, OnModuleDestroy {
     }
 
     await this.pool.query(SCHEMA_SQL)
+    await this.seedPrompts()
     await this.seedIfEmpty()
     this.initialized = true
     logger.log("PostgreSQL schema is ready")
@@ -314,6 +621,28 @@ export class PostgresService implements OnModuleInit, OnModuleDestroy {
     return {
       projects: Number(rows[0]?.projects ?? 0),
       uploads: Number(rows[0]?.uploads ?? 0),
+    }
+  }
+
+  private async seedPrompts() {
+    for (const prompt of DEFAULT_PROMPT_SEEDS) {
+      await this.query(
+        `
+        insert into llm_prompts (
+          module, prompt_key, title, system_prompt, user_prompt_template, created_at, updated_at
+        ) values (
+          $1, $2, $3, $4, $5, now(), now()
+        )
+        on conflict (module, prompt_key) do nothing
+        `,
+        [
+          prompt.module,
+          prompt.promptKey,
+          prompt.title,
+          prompt.systemPrompt,
+          prompt.userPromptTemplate,
+        ]
+      )
     }
   }
 

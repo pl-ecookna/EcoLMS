@@ -1,6 +1,6 @@
 # EcoLMS
 
-EcoLMS — внутренний инструмент для сборки обучающих курсов из видео, аудио и документов. Репозиторий организован как `pnpm`-монорепозиторий с четырьмя приложениями: `web`, `api`, `worker` и `transcription-service`.
+EcoLMS — внутренняя платформа для работы с контентом из медиа- и документных источников. Сейчас в репозитории уже реализован workflow генерации обучающих курсов, а для `meetings` добавлены backend API, схема БД, worker pipeline под `SaluteSpeech` и UI-раздел `/meetings`. Репозиторий организован как `pnpm`-монорепозиторий с четырьмя приложениями: `web`, `api`, `worker` и `transcription-service`.
 
 ## Актуальный стек
 
@@ -14,9 +14,9 @@ EcoLMS — внутренний инструмент для сборки обу�
 
 ## Структура репозитория
 
-- `apps/web` — UI на Next.js с App Router
-- `apps/api` — NestJS API для проектов, загрузок, задач, артефактов и health-check
-- `apps/worker` — фоновая обработка файлов и генерация этапов курса
+- `apps/web` — UI на Next.js с App Router, включая `courses` и `meetings`
+- `apps/api` — NestJS API для `courses`, `meetings`, загрузок, задач, артефактов и health-check
+- `apps/worker` — фоновая обработка файлов, генерация этапов курса и pipeline модуля `meetings`
 - `apps/transcription-service` — сервис транскрибации аудио и видео
 - `doc` — предметная и инфраструктурная документация
 - `docker` — Dockerfile для каждого сервиса
@@ -51,6 +51,15 @@ Browser
 ### `apps/web`
 
 - один экран-дашборд для списка проектов и карточки проекта;
+- отдельный экран `/meetings` в двухпанельной компоновке: список встреч слева, результаты обработки справа;
+- редактор промптов вынесен на отдельную страницу `/prompts` и доступен из LMS и `meetings`;
+- добавление новой записи встречи прямо из `/meetings`: создать карточку, загрузить один файл и сразу запустить обработку;
+- в `meetings` и LMS используется единый паттерн уведомлений: компактные toast-like alerts в правом нижнем углу;
+- экран `meetings` показывает доступность `LLM`, `SaluteSpeech`, баз данных и фоновых модулей через health badge, как в LMS;
+- в левом списке встреч есть меню `...` с действиями `Информация` и `Удалить`;
+- в хедере экрана `/meetings` есть кнопка возврата к основному интерфейсу LMS;
+- по пункту `Информация` открывается `Sheet` с техническими деталями, `jobs` и артефактами;
+- markdown для встречи содержит только человекочитаемые разделы: саммари, протокол и поручения;
 - загрузка до 5 файлов;
 - поддержка документов, аудио и видео;
 - запуск генерации отдельных этапов и цепочки этапов;
@@ -61,8 +70,10 @@ Browser
 ### `apps/api`
 
 - глобальный префикс маршрутов: `/api`;
-- контроллеры: `projects`, `uploads`, `jobs`, `artifacts`, `health`;
+- контроллеры: `projects`, `uploads`, `jobs`, `artifacts`, `health`, `prompts`;
+- health-check агрегирует статус `api`, `postgres`, `redis`, `llm`, `salutespeech`, `worker`, `transcription-service`;
 - хранение и миграция минимальной схемы БД выполняются прямо из `PostgresService`;
+- таблица `llm_prompts` хранит редактируемые prompt templates для `lms` и `meetings`;
 - очередь реализована через Redis list, без BullMQ;
 - presigned URL для S3 формируются собственным кодом, без AWS SDK.
 
@@ -73,7 +84,9 @@ Browser
 - извлечение текста из `pdf`, `docx`, `pptx`, `rtf`, `txt`;
 - вызов transcription-service для аудио/видео;
 - генерация `source_compiled`, `course_outline`, `course_content`, `course_test`;
-- вызов OpenAI/OpenRouter по HTTP с fallback между провайдерами.
+- вызов только одного выбранного LLM-провайдера (`OpenAI` или `OpenRouter`) по `LLM_PRIMARY_PROVIDER`.
+- ошибки `quota / balance / payment required` от LLM и `SaluteSpeech` нормализуются в человекочитаемый текст для UI и job logs.
+- prompt templates для `lms` и `meetings` читаются из PostgreSQL (`llm_prompts`), а встроенные prompt definitions используются как seed по умолчанию.
 
 ### `apps/transcription-service`
 
@@ -91,6 +104,27 @@ Browser
 - [doc/API_описание.md](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/doc/API_описание.md)
 - [doc/DB_схема.md](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/doc/DB_схема.md)
 - [doc/Архитектура_AI_ассистент_для_создания_обучающих_курсов.md](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/doc/Архитектура_AI_ассистент_для_создания_обучающих_курсов.md)
+- [doc/Модуль_встреч.md](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/doc/Модуль_встреч.md)
+
+## Зафиксированное развитие
+
+Для нового модуля `meetings` уже зафиксированы и частично реализованы такие решения:
+
+- отдельный bounded context, не смешанный с workflow курсов;
+- язык встреч в V1: только русский;
+- один файл на встречу;
+- целевой провайдер распознавания и диаризации: `SaluteSpeech`;
+- канонический результат хранится в PostgreSQL, а сырой ответ провайдера сохраняется в `job result_json`;
+- ручная правка speaker labels предусмотрена в UI и модели данных;
+- UI-раздел `/meetings` уже добавлен и показывает список встреч, карточку встречи и единый markdown-файл.
+
+Что уже есть в backend:
+
+- таблицы `meetings`, `meeting_source_files`, `meeting_upload_sessions`, `meeting_jobs`, `meeting_speakers`, `meeting_speaker_segments`, `meeting_artifacts`;
+- REST-маршруты `/api/meetings/*`;
+- отдельная Redis-очередь `ecolms:meeting-jobs`;
+- worker pipeline `audio_prepared -> transcript_compiled -> meeting_summary -> meeting_protocol -> meeting_actions`;
+- интеграция worker с `SaluteSpeech` через async API и нормализацию diarized transcript в PostgreSQL.
 
 ## Локальный запуск
 
@@ -101,6 +135,8 @@ Browser
 5. Запустить web: `pnpm dev:web`.
 6. При необходимости запустить transcription service: `pnpm dev:transcription`.
 7. При необходимости запустить worker: `pnpm dev:worker`.
+
+Примечание: `pnpm dev:worker` использует `uv` и зависимости из [apps/worker/pyproject.toml](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/apps/worker/pyproject.toml), а для обработки встреч `meetings` worker требует доступный `ffmpeg`.
 
 ## Основные команды
 
@@ -131,8 +167,35 @@ Browser
 - `LLM_PRIMARY_PROVIDER`
 - `OPENAI_MODEL`
 - `OPENROUTER_MODEL`
+- `LLM_TIMEOUT_SECONDS`
 - `TRANSCRIPTION_SERVICE_URL`
 - `WHISPER_MODEL_SIZE`
 - `WHISPER_COMPUTE_TYPE`
+- `WORKER_JOB_QUEUE_KEY`
+- `WORKER_MEETING_JOB_QUEUE_KEY`
+- `SALUTESPEECH_AUTH_KEY`
+- `SALUTESPEECH_OAUTH_URL`
+- `SALUTESPEECH_REST_URL`
+- `SALUTESPEECH_UPLOAD_URL`
+- `SALUTESPEECH_RECOGNIZE_URL`
+- `SALUTESPEECH_TASK_URL`
+- `SALUTESPEECH_DOWNLOAD_URL`
+- `SALUTESPEECH_SCOPE`
+- `SALUTESPEECH_MODEL`
+- `SALUTESPEECH_LANGUAGE`
+- `SALUTESPEECH_CA_CERT_PATH`
+- `SALUTESPEECH_SSL_NO_VERIFY`
+- `SALUTESPEECH_POLL_INTERVAL_SECONDS`
+- `SALUTESPEECH_TIMEOUT_SECONDS`
+
+Для обратной совместимости `api` и `worker` также понимают старые алиасы `SBER_*`
+и могут собрать OAuth Basic key из `SBER_CLIENT_ID` + `SBER_CLIENT_SECRET`, если
+`SALUTESPEECH_AUTH_KEY` не задан.
+`SALUTESPEECH_AUTH_KEY` допускает три формата: готовый base64, строку
+`client_id:client_secret` или значение с префиксом `Basic `.
+
+Если используется `SALUTESPEECH_CA_CERT_PATH=certs/russiantrustedca.pem`, каталог
+`certs/` должен быть скопирован в runtime-образ `worker`, иначе этап
+`transcript_compiled` завершится системной ошибкой `[Errno 2] No such file or directory`.
 
 Полный пример находится в [.env.example](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/.env.example).
