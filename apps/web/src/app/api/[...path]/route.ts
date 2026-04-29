@@ -50,6 +50,12 @@ async function proxy(
   const url = new URL(request.url)
   const headers = new Headers(request.headers)
   headers.delete("host")
+  headers.delete("content-length")
+
+  const requestBody =
+    request.method === "GET" || request.method === "HEAD"
+      ? undefined
+      : await request.arrayBuffer()
 
   let lastNetworkError: unknown = null
   let lastResponse: Response | null = null
@@ -61,10 +67,7 @@ async function proxy(
     const requestInit = {
       method: request.method,
       headers,
-      body:
-        request.method === "GET" || request.method === "HEAD"
-          ? undefined
-          : request.body,
+      body: requestBody,
       cache: "no-store",
     } as RequestInit & { duplex?: "half" }
 
