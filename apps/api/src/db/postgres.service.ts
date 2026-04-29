@@ -166,28 +166,43 @@ const DEFAULT_PROMPT_SEEDS = [
     module: "meetings",
     promptKey: "meeting_summary",
     title: "Краткая сводка встречи",
-    systemPrompt:
-      "Ты анализируешь русскоязычные встречи. Используй только факты из transcript. Не придумывай имена, сроки, решения и поручения, которых нет в тексте.",
+    systemPrompt: `Ты анализируешь русскоязычные встречи и готовишь тематическое саммари.
+
+Саммари должно отвечать на вопрос "что обсуждали", а не "что решили".
+
+Содержательная структура:
+- выдели основные темы обсуждения;
+- в каждой теме кратко опиши контекст и перечисли вопросы, которые обсуждались внутри темы;
+- если вопрос явно остался открытым, пометь его как открытый;
+- не превращай саммари в протокол решений и список поручений.`,
     userPromptTemplate:
-      "Сформируй краткое summary встречи на русском языке. Верни только JSON с полями markdown и shortSummary. Используй только данные из transcript, ничего не выдумывай.",
+      "Сформируй тематическое саммари встречи на русском языке. Используй только факты из transcript. Не придумывай имена, сроки, решения и поручения, которых нет в тексте. Markdown должен быть без заголовка первого уровня; разделы второго уровня — темы обсуждения. Верни только JSON с полями markdown и shortSummary. Поле markdown должно содержать markdown с темами и вопросами. Поле shortSummary должно содержать 1–2 предложения общего содержания встречи.",
   },
   {
     module: "meetings",
     promptKey: "meeting_protocol",
     title: "Протокол встречи",
-    systemPrompt:
-      "Ты анализируешь русскоязычные встречи. Используй только факты из transcript. Не придумывай имена, сроки, решения и поручения, которых нет в тексте.",
+    systemPrompt: `Ты анализируешь русскоязычные встречи и готовишь рабочий протокол.
+
+Протокол должен отвечать на вопрос "что решили и что нужно сделать".
+
+Содержательная структура:
+- сгруппируй итог по темам встречи;
+- внутри каждой темы отрази решения, поставленные задачи и ответственных;
+- если ответственный или срок не прозвучал, прямо укажи "не указан";
+- если по теме не было решений или задач, напиши "решения и задачи не зафиксированы";
+- не пересказывай всю дискуссию, оставляй только управленчески значимый итог.`,
     userPromptTemplate:
-      "Сформируй протокол встречи на русском языке. Верни только JSON с полями markdown и shortSummary. Используй только данные из transcript, ничего не выдумывай.",
+      "Сформируй протокол встречи на русском языке. Используй только факты из transcript. Не придумывай имена, сроки, решения, задачи и ответственных, которых нет в тексте. Markdown должен быть без заголовка первого уровня; разделы второго уровня — темы встречи. По каждой теме покажи решения, задачи и ответственных, если они явно есть в transcript. Если ответственного или срока нет, укажи, что он не указан. Верни только JSON с полями markdown и shortSummary. Поле markdown должно содержать markdown-протокол по темам. Поле shortSummary должно содержать 1–2 предложения с главным итогом встречи.",
   },
   {
     module: "meetings",
     promptKey: "meeting_actions",
     title: "Поручения и решения по встрече",
     systemPrompt:
-      "Ты анализируешь русскоязычные встречи. Используй только факты из transcript. Не придумывай имена, сроки, решения и поручения, которых нет в тексте.",
+      "Ты анализируешь русскоязычные встречи и выделяешь решения, поручения и открытые вопросы.",
     userPromptTemplate:
-      "Сформируй структурированные результаты встречи на русском языке. Верни только JSON с полями markdown, shortSummary, decisions, actionItems, openQuestions. Для actionItems указывай assignee и deadline только если они явно прозвучали. Для actionItems по возможности указывай sourceSegmentIds как массив segment_id из transcript.",
+      "Сформируй структурированные результаты встречи на русском языке. Используй только факты из transcript. Не придумывай имена, сроки, решения и поручения, которых нет в тексте. Верни только JSON с полями markdown, shortSummary, decisions, actionItems, openQuestions. Для actionItems указывай assignee и deadline только если они явно прозвучали. Для actionItems по возможности указывай sourceSegmentIds как массив segment_id из transcript.",
   },
 ] as const
 
@@ -641,6 +656,54 @@ export class PostgresService implements OnModuleInit, OnModuleDestroy {
           prompt.title,
           prompt.systemPrompt,
           prompt.userPromptTemplate,
+        ]
+      )
+    }
+
+    const defaultPromptUpgrades = [
+      {
+        promptKey: "meeting_summary",
+        oldSystemNeedle: "Верни только JSON",
+      },
+      {
+        promptKey: "meeting_protocol",
+        oldSystemNeedle: "Верни только JSON",
+      },
+      {
+        promptKey: "meeting_actions",
+        oldSystemNeedle:
+          "Не придумывай имена, сроки, решения и поручения, которых нет в тексте.",
+      },
+    ]
+
+    for (const upgrade of defaultPromptUpgrades) {
+      const prompt = DEFAULT_PROMPT_SEEDS.find(
+        (item) =>
+          item.module === "meetings" && item.promptKey === upgrade.promptKey
+      )
+      if (!prompt) {
+        continue
+      }
+
+      await this.query(
+        `
+        update llm_prompts
+        set
+          title = $3,
+          system_prompt = $4,
+          user_prompt_template = $5,
+          updated_at = now()
+        where module = $1
+          and prompt_key = $2
+          and position($6 in system_prompt) > 0
+        `,
+        [
+          prompt.module,
+          prompt.promptKey,
+          prompt.title,
+          prompt.systemPrompt,
+          prompt.userPromptTemplate,
+          upgrade.oldSystemNeedle,
         ]
       )
     }

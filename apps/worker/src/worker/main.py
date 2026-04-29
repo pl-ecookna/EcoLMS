@@ -501,6 +501,39 @@ def ensure_prompt_storage(conn: psycopg.Connection) -> None:
             ),
         )
 
+    default_prompt_upgrades = {
+        "meeting_summary": "Верни только JSON",
+        "meeting_protocol": "Верни только JSON",
+        "meeting_actions": (
+            "Не придумывай имена, сроки, решения и поручения, которых нет в тексте."
+        ),
+    }
+    for prompt_key, old_system_needle in default_prompt_upgrades.items():
+        prompt = DEFAULT_PROMPTS.get(("meetings", prompt_key))
+        if prompt is None:
+            continue
+        conn.execute(
+            """
+            update llm_prompts
+            set
+              title = %s,
+              system_prompt = %s,
+              user_prompt_template = %s,
+              updated_at = now()
+            where module = %s
+              and prompt_key = %s
+              and position(%s in system_prompt) > 0
+            """,
+            (
+                prompt.title,
+                prompt.system_prompt,
+                prompt.user_prompt_template,
+                prompt.module,
+                prompt.key,
+                old_system_needle,
+            ),
+        )
+
 
 def load_prompt_definition(
     conn: psycopg.Connection,

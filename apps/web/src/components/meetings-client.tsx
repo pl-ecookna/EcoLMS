@@ -401,6 +401,86 @@ function buildReadableMarkdown(meeting: MeetingDetailRecord) {
     .join("\n")
 }
 
+function formatTranscriptRange(startMs: number, endMs: number) {
+  const formatOne = (value: number) => {
+    const totalSeconds = Math.max(0, Math.floor(value / 1000))
+    const hours = Math.floor(totalSeconds / 3600)
+    const minutes = Math.floor((totalSeconds % 3600) / 60)
+    const seconds = totalSeconds % 60
+
+    if (hours > 0) {
+      return `${hours.toString().padStart(2, "0")}:${minutes
+        .toString()
+        .padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`
+    }
+
+    return `${minutes.toString().padStart(2, "0")}:${seconds
+      .toString()
+      .padStart(2, "0")}`
+  }
+
+  return `${formatOne(startMs)} - ${formatOne(endMs)}`
+}
+
+function safeDownloadName(value: string) {
+  return (
+    value
+      .trim()
+      .replace(/[\\/:*?"<>|]+/g, "-")
+      .replace(/\s+/g, " ")
+      .slice(0, 120) || "meeting"
+  )
+}
+
+function buildTranscriptMarkdown(meeting: MeetingDetailRecord) {
+  const lines = [
+    `# Транскрипт встречи: ${meeting.title}`,
+    "",
+    "## Метаданные",
+    "",
+    `- Встреча: ${meeting.title}`,
+    meeting.description ? `- Комментарий: ${meeting.description}` : "",
+    `- Статус: ${meetingStatusLabel(meeting.status)}`,
+    `- Язык: ${meeting.language}`,
+    `- Длительность: ${formatDuration(meeting.durationSeconds)}`,
+    `- Спикеров: ${meeting.speakers.length || meeting.speakersCount}`,
+    `- Создано: ${formatDateTime(meeting.createdAt)}`,
+    meeting.processingFinishedAt
+      ? `- Обработка завершена: ${formatDateTime(meeting.processingFinishedAt)}`
+      : "",
+    "",
+    "## Спикеры",
+    "",
+    ...(
+      meeting.speakers.length
+        ? meeting.speakers.map(
+            (speaker) => `- ${speaker.displayName} (${speaker.speakerLabel})`
+          )
+        : ["_Спикеры не определены._"]
+    ),
+    "",
+    "## Полный транскрипт",
+    "",
+  ].filter(Boolean)
+
+  if (meeting.segments.length === 0) {
+    lines.push("_Транскрипт пока пуст._")
+  } else {
+    for (const segment of meeting.segments) {
+      lines.push(
+        `### [${formatTranscriptRange(segment.startMs, segment.endMs)}] ${
+          segment.displayName || segment.speakerLabel
+        }`,
+        "",
+        segment.text?.trim() || "—",
+        ""
+      )
+    }
+  }
+
+  return `${lines.join("\n").trim()}\n`
+}
+
 function buildMeetingInfoUrl(meetingId: string, currentPage: number) {
   return `/meetings?page=${currentPage}&meeting=${meetingId}&info=1`
 }
@@ -1701,6 +1781,7 @@ export function MeetingDetailView({
   }, [initialMeeting, speakerOverrides])
 
   const combinedMarkdown = useMemo(() => buildReadableMarkdown(meeting), [meeting])
+  const transcriptMarkdown = useMemo(() => buildTranscriptMarkdown(meeting), [meeting])
   const isMeetingProcessing =
     isMeetingActiveStatus(meeting.status) || meeting.jobs.some((job) => isActiveJobStatus(job.status))
   const hasMarkdownArtifacts =
@@ -1740,7 +1821,14 @@ export function MeetingDetailView({
   }
 
   const handleDownloadMarkdown = () => {
-    downloadText(`${meeting.title}.md`, markdownDraft)
+    downloadText(`${safeDownloadName(meeting.title)}.md`, markdownDraft)
+  }
+
+  const handleDownloadTranscriptMarkdown = () => {
+    downloadText(
+      `${safeDownloadName(meeting.title)}-transcript.md`,
+      transcriptMarkdown
+    )
   }
 
   const handleRegenerateMaterials = async () => {
@@ -1923,11 +2011,24 @@ export function MeetingDetailView({
           <TabsContent value="transcript" className="space-y-3">
             <Card>
               <CardHeader className="border-b px-4 py-3">
-                <CardTitle>Diarized transcript</CardTitle>
-                <CardDescription>
-                  Только диаризованный текст, который можно читать и править через
-                  speaker labels.
-                </CardDescription>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="flex flex-col gap-1">
+                    <CardTitle>Diarized transcript</CardTitle>
+                    <CardDescription>
+                      Только диаризованный текст, который можно читать и править через
+                      speaker labels.
+                    </CardDescription>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleDownloadTranscriptMarkdown}
+                    disabled={meeting.segments.length === 0}
+                  >
+                    <DownloadIcon data-icon="inline-start" />
+                    Скачать полный .md
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent className="p-0">
                 <ScrollArea className="h-[620px]">

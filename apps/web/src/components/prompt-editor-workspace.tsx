@@ -23,7 +23,7 @@ import {
 
 type PromptDraft = {
   title: string
-  systemPrompt: string
+  prompt: string
   userPromptTemplate: string
 }
 
@@ -61,7 +61,7 @@ export function PromptEditorWorkspace({
   const [selectedPromptKey, setSelectedPromptKey] = useState<string | null>(null)
   const [promptDraft, setPromptDraft] = useState<PromptDraft>({
     title: "",
-    systemPrompt: "",
+    prompt: "",
     userPromptTemplate: "",
   })
 
@@ -85,7 +85,7 @@ export function PromptEditorWorkspace({
     setSelectedPromptKey(`${prompt.module}:${prompt.promptKey}`)
     setPromptDraft({
       title: prompt.title,
-      systemPrompt: prompt.systemPrompt,
+      prompt: prompt.systemPrompt,
       userPromptTemplate: prompt.userPromptTemplate,
     })
   }
@@ -109,7 +109,7 @@ export function PromptEditorWorkspace({
         setSelectedPromptKey(null)
         setPromptDraft({
           title: "",
-          systemPrompt: "",
+          prompt: "",
           userPromptTemplate: "",
         })
       }
@@ -130,7 +130,7 @@ export function PromptEditorWorkspace({
     try {
       const updated = await updatePrompt(selectedPrompt.module, selectedPrompt.promptKey, {
         title: promptDraft.title.trim(),
-        systemPrompt: promptDraft.systemPrompt,
+        systemPrompt: promptDraft.prompt.trim(),
         userPromptTemplate: promptDraft.userPromptTemplate,
       })
 
@@ -237,7 +237,8 @@ export function PromptEditorWorkspace({
                 <div className="space-y-1">
                   <CardTitle>Редактор промпта</CardTitle>
                   <div className="text-sm text-muted-foreground">
-                    Редактирование применяется без деплоя, сразу через записи в PostgreSQL.
+                    Редактирование применяется без деплоя. Технический формат ответа
+                    закреплён системой и не показывается в этом редакторе.
                   </div>
                 </div>
                 {selectedPrompt ? (
@@ -280,42 +281,22 @@ export function PromptEditorWorkspace({
                       </div>
 
                       <div className="space-y-2">
-                        <Label htmlFor="prompt-system">System prompt</Label>
+                        <Label htmlFor="prompt-text">Промпт</Label>
                         <Textarea
-                          id="prompt-system"
-                          value={promptDraft.systemPrompt}
+                          id="prompt-text"
+                          value={promptDraft.prompt}
                           onChange={(event) =>
                             setPromptDraft((current) => ({
                               ...current,
-                              systemPrompt: event.target.value,
+                              prompt: event.target.value,
                             }))
                           }
-                          className="min-h-[320px] font-mono text-xs leading-6"
+                          className="min-h-[560px] font-mono text-xs leading-6"
                         />
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label htmlFor="prompt-user">User prompt template</Label>
-                        <Textarea
-                          id="prompt-user"
-                          value={promptDraft.userPromptTemplate}
-                          onChange={(event) =>
-                            setPromptDraft((current) => ({
-                              ...current,
-                              userPromptTemplate: event.target.value,
-                            }))
-                          }
-                          className="min-h-[260px] font-mono text-xs leading-6"
-                        />
-                        {selectedPrompt.module === "lms" ? (
-                          <div className="text-xs text-muted-foreground">
-                            Для LMS можно использовать плейсхолдер{" "}
-                            <code className="rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]">
-                              {"{source_type}"}
-                            </code>
-                            .
-                          </div>
-                        ) : null}
+                        <div className="text-xs text-muted-foreground">
+                          Служебные требования к JSON, обязательным полям и входным
+                          данным применяются автоматически.
+                        </div>
                       </div>
 
                       <div className="flex items-center justify-end gap-2 border-t pt-4">
