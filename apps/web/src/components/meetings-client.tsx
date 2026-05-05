@@ -202,6 +202,11 @@ function stageTitle(stage: MeetingStageId) {
   return meetingStageLabels[stage]
 }
 
+function formatErrorText(value: string | null | undefined) {
+  const trimmed = value?.trim()
+  return trimmed && trimmed.length > 0 ? trimmed : null
+}
+
 function sourceFileLabel(meeting: MeetingListRecord | MeetingDetailRecord) {
   return meeting.sourceFile?.originalName ?? "Файл не загружен"
 }
@@ -268,6 +273,55 @@ function isActiveJobStatus(status: MeetingJobRecord["status"]) {
   return status === "queued" || status === "processing"
 }
 
+function toTime(value: string | null | undefined) {
+  if (!value) {
+    return 0
+  }
+  const time = new Date(value).getTime()
+  return Number.isFinite(time) ? time : 0
+}
+
+function getStageOutputUpdatedAt(
+  meeting: MeetingDetailRecord,
+  stage: MeetingStageId
+) {
+  if (stage === "audio_prepared") {
+    return meeting.sourceFile?.processingStatus === "done"
+      ? toTime(meeting.sourceFile.createdAt)
+      : 0
+  }
+
+  if (stage === "transcript_compiled" && meeting.segments.length > 0) {
+    return Math.max(
+      ...meeting.segments.map((segment) => toTime(segment.createdAt)),
+      toTime(getArtifact(meeting, "transcript_compiled")?.updatedAt)
+    )
+  }
+
+  if (stage === "meeting_actions" && getActionsItems(meeting).length > 0) {
+    return toTime(getArtifact(meeting, "meeting_actions")?.updatedAt)
+  }
+
+  const artifact = getArtifact(meeting, stage)
+  return artifact?.contentMd?.trim() ? toTime(artifact.updatedAt) : 0
+}
+
+function hasStageOutput(meeting: MeetingDetailRecord, stage: MeetingStageId) {
+  if (stage === "audio_prepared") {
+    return meeting.sourceFile?.processingStatus === "done"
+  }
+  if (stage === "transcript_compiled") {
+    return meeting.segments.length > 0 || Boolean(getArtifact(meeting, stage)?.contentMd?.trim())
+  }
+  if (stage === "meeting_actions") {
+    return (
+      getActionsItems(meeting).length > 0 ||
+      Boolean(getArtifact(meeting, stage)?.contentMd?.trim())
+    )
+  }
+  return Boolean(getArtifact(meeting, stage)?.contentMd?.trim())
+}
+
 function getStageJob(
   meeting: MeetingDetailRecord | null,
   stage: MeetingStageId
@@ -291,7 +345,28 @@ function getMeetingStageUiStatus(
   meeting: MeetingDetailRecord | null,
   stage: MeetingStageId
 ): MeetingStageUiStatus {
+  if (!meeting) {
+    return "pending"
+  }
+
   const job = getStageJob(meeting, stage)
+  const outputUpdatedAt = getStageOutputUpdatedAt(meeting, stage)
+
+  if (
+    job?.status === "processing" &&
+    toTime(job.createdAt) > outputUpdatedAt
+  ) {
+    return "processing"
+  }
+
+  if (job?.status === "queued" && !hasStageOutput(meeting, stage)) {
+    return "queued"
+  }
+
+  if (hasStageOutput(meeting, stage)) {
+    return "done"
+  }
+
   if (!job) {
     return "pending"
   }
@@ -310,6 +385,19 @@ function getMeetingStageUiStatus(
   }
 
   return "pending"
+}
+
+function hasEffectiveActiveMeetingJob(meeting: MeetingDetailRecord) {
+  return ([
+    "audio_prepared",
+    "transcript_compiled",
+    "meeting_summary",
+    "meeting_protocol",
+    "meeting_actions",
+  ] as MeetingStageId[]).some((stage) => {
+    const status = getMeetingStageUiStatus(meeting, stage)
+    return status === "queued" || status === "processing"
+  })
 }
 
 function getMeetingProcessingProgress(meeting: MeetingDetailRecord | null) {
@@ -520,7 +608,11 @@ function MeetingInfoSheet({
                 <div className="rounded-2xl border p-4">
                   <div className="text-sm text-muted-foreground">Статус</div>
                   <div className="mt-2">
-                    <StatusBadge status={meeting.status} />
+                    <StatusBadge
+                      status={meeting.status}
+                      errorText={meeting.errorText}
+                      errorTitle="Ошибка обработки встречи"
+                    />
                   </div>
                 </div>
                 <div className="rounded-2xl border p-4">
@@ -563,7 +655,11 @@ function MeetingInfoSheet({
                       <TableRow key={job.id}>
                         <TableCell>{stageTitle(job.stage)}</TableCell>
                         <TableCell>
-                          <StatusBadge status={job.status} />
+                          <StatusBadge
+                            status={job.status}
+                            errorText={job.errorText}
+                            errorTitle={`Ошибка этапа «${stageTitle(job.stage)}»`}
+                          />
                         </TableCell>
                         <TableCell>{formatDateTime(job.startedAt)}</TableCell>
                         <TableCell>{formatDateTime(job.finishedAt)}</TableCell>
@@ -664,19 +760,45 @@ function markdownComponents() {
 
 function StatusBadge({
   status,
+  errorText,
+  errorTitle,
 }: {
   status: MeetingStatus | MeetingJobRecord["status"]
+  errorText?: string | null
+  errorTitle?: string | null
 }) {
-  if (
+  const errorDetails = formatErrorText(errorText)
+  const badge =
     status === "queued" ||
     status === "processing" ||
     status === "done" ||
-    status === "failed"
-  ) {
-    return <Badge variant={jobStatusVariant(status)}>{jobStatusLabel(status)}</Badge>
+    status === "failed" ? (
+      <Badge variant={jobStatusVariant(status)}>{jobStatusLabel(status)}</Badge>
+    ) : (
+      <Badge variant={meetingStatusVariant(status)}>{meetingStatusLabel(status)}</Badge>
+    )
+
+  if (status !== "failed" || !errorDetails) {
+    return badge
   }
 
-  return <Badge variant={meetingStatusVariant(status)}>{meetingStatusLabel(status)}</Badge>
+  return (
+    <HoverCard>
+      <HoverCardTrigger>
+        <span className="inline-flex">{badge}</span>
+      </HoverCardTrigger>
+      <HoverCardContent align="start" side="top" className="max-w-96 space-y-2">
+        <div className="space-y-1">
+          <div className="text-sm font-medium">
+            {errorTitle?.trim() || "Подробности ошибки"}
+          </div>
+          <div className="text-sm leading-6 text-muted-foreground">
+            {errorDetails}
+          </div>
+        </div>
+      </HoverCardContent>
+    </HoverCard>
+  )
 }
 
 function EmptyState({
@@ -1359,7 +1481,11 @@ export function MeetingsWorkspaceView({
                               </div>
                             </Link>
                             <div className="flex items-start gap-2">
-                              <StatusBadge status={meeting.status} />
+                              <StatusBadge
+                                status={meeting.status}
+                                errorText={meeting.errorText}
+                                errorTitle="Ошибка обработки встречи"
+                              />
                               <DropdownMenu>
                                 <DropdownMenuTrigger
                                   className={cn(
@@ -1783,7 +1909,9 @@ export function MeetingDetailView({
   const combinedMarkdown = useMemo(() => buildReadableMarkdown(meeting), [meeting])
   const transcriptMarkdown = useMemo(() => buildTranscriptMarkdown(meeting), [meeting])
   const isMeetingProcessing =
-    isMeetingActiveStatus(meeting.status) || meeting.jobs.some((job) => isActiveJobStatus(job.status))
+    (isMeetingActiveStatus(meeting.status) &&
+      getMeetingProcessingProgress(meeting) < 100) ||
+    hasEffectiveActiveMeetingJob(meeting)
   const hasMarkdownArtifacts =
     Boolean(getArtifact(meeting, "meeting_summary")?.contentMd?.trim()) ||
     Boolean(getArtifact(meeting, "meeting_protocol")?.contentMd?.trim()) ||
