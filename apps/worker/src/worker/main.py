@@ -2533,14 +2533,14 @@ def queue_next_meeting_job(
             next_job_id,
             meeting_id,
             next_stage_value,
-            json.dumps({"stage": next_stage_value, "trigger": "manual"}, ensure_ascii=False),
+            json.dumps({"stage": next_stage_value, "trigger": "auto"}, ensure_ascii=False),
         ),
     )
     return {
         "jobId": next_job_id,
         "meetingId": meeting_id,
         "stage": next_stage_value,
-        "trigger": "manual",
+        "trigger": "auto",
     }
 
 
@@ -2616,7 +2616,11 @@ def process_meeting_job(config: WorkerConfig, job_message: dict[str, Any]) -> No
                 metadata = handle_meeting_generation_stage(conn, config, meeting, job["stage"])
 
             set_meeting_job_done(conn, job["id"], job["stage"], metadata)
-            next_job_payload = queue_next_meeting_job(conn, config, meeting["id"], job["stage"])
+            trigger = str((job.get("payload_json") or {}).get("trigger") or "")
+            if trigger in {"start", "auto"}:
+                next_job_payload = queue_next_meeting_job(
+                    conn, config, meeting["id"], job["stage"]
+                )
 
             if next_job_payload is None:
                 conn.execute(

@@ -17,7 +17,7 @@ export type MeetingJobMessage = {
     | "meeting_summary"
     | "meeting_protocol"
     | "meeting_actions"
-  trigger: "start" | "manual" | "retry"
+  trigger: "start" | "manual" | "auto" | "retry"
 }
 
 const JOB_QUEUE_KEY = "ecolms:processing-jobs"

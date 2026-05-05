@@ -233,6 +233,91 @@ function buildActionsJson(contentMd: string) {
   }
 }
 
+function timeOf(value: string | null | undefined) {
+  if (!value) {
+    return 0
+  }
+  const time = new Date(value).getTime()
+  return Number.isFinite(time) ? time : 0
+}
+
+function artifactForStage(
+  artifacts: MeetingArtifactRecord[],
+  stage: MeetingArtifactStage
+) {
+  return artifacts.find((artifact) => artifact.stage === stage && artifact.format === "md")
+}
+
+function hasMeetingArtifactOutput(
+  artifacts: MeetingArtifactRecord[],
+  stage: MeetingArtifactStage
+) {
+  const artifact = artifactForStage(artifacts, stage)
+  return Boolean(artifact?.contentMd?.trim())
+}
+
+function meetingArtifactUpdatedAt(
+  artifacts: MeetingArtifactRecord[],
+  stage: MeetingArtifactStage
+) {
+  return timeOf(artifactForStage(artifacts, stage)?.updatedAt)
+}
+
+function hasEffectiveActiveJob(
+  jobs: MeetingJobRecord[],
+  artifacts: MeetingArtifactRecord[],
+  stage: MeetingStageId
+) {
+  const job = [...jobs]
+    .filter((item) => item.stage === stage)
+    .sort((left, right) => timeOf(right.createdAt) - timeOf(left.createdAt))[0]
+  if (!job || (job.status !== "queued" && job.status !== "processing")) {
+    return false
+  }
+  if (stage === "audio_prepared") {
+    return true
+  }
+
+  const artifactStage = stage as MeetingArtifactStage
+  const hasOutput = hasMeetingArtifactOutput(artifacts, artifactStage)
+  if (job.status === "queued") {
+    return !hasOutput
+  }
+
+  return timeOf(job.createdAt) > meetingArtifactUpdatedAt(artifacts, artifactStage)
+}
+
+function shouldMarkMeetingCompleted(input: {
+  meeting: MeetingRecord
+  sourceFile: MeetingSourceFileRecord | null
+  jobs: MeetingJobRecord[]
+  artifacts: MeetingArtifactRecord[]
+}) {
+  if (input.meeting.status !== "processing" && input.meeting.status !== "uploaded") {
+    return false
+  }
+
+  const requiredArtifacts: MeetingArtifactStage[] = [
+    "transcript_compiled",
+    "meeting_summary",
+    "meeting_protocol",
+    "meeting_actions",
+  ]
+  const hasAllOutputs =
+    input.sourceFile?.processingStatus === "done" &&
+    requiredArtifacts.every((stage) =>
+      hasMeetingArtifactOutput(input.artifacts, stage)
+    )
+
+  if (!hasAllOutputs) {
+    return false
+  }
+
+  return !meetingStageOrder.some((stage) =>
+    hasEffectiveActiveJob(input.jobs, input.artifacts, stage)
+  )
+}
+
 function mapSegmentRow(
   row: Record<string, unknown>,
   speakersById: Map<string, MeetingSpeakerRecord>
@@ -363,13 +448,33 @@ export class MeetingsStore {
   }
 
   async getMeeting(id: string) {
-    const meeting = await this.getMeetingSummary(id)
+    let meeting = await this.getMeetingSummary(id)
     const [sourceFile, speakers, jobs, artifacts] = await Promise.all([
       this.getSourceFile(id),
       this.listSpeakers(id),
       this.listJobs(id),
       this.listArtifacts(id),
     ])
+
+    if (shouldMarkMeetingCompleted({ meeting, sourceFile, jobs, artifacts })) {
+      await this.db.query(
+        `
+        update meetings
+        set status = 'completed',
+            processing_finished_at = coalesce(processing_finished_at, now()),
+            updated_at = now()
+        where id = $1
+        `,
+        [id]
+      )
+      meeting = {
+        ...meeting,
+        status: "completed",
+        processingFinishedAt: meeting.processingFinishedAt ?? nowIso(),
+        updatedAt: nowIso(),
+      }
+    }
+
     const speakersById = new Map(speakers.map((speaker) => [speaker.id, speaker]))
     const rawSegments = await this.db.query<Record<string, unknown>>(
       `
