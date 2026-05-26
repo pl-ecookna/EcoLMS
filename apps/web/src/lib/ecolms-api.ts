@@ -201,12 +201,13 @@ export interface SystemHealthRecord {
   status: ServiceHealthStatus
   service: "api"
   timestamp: string
+  speechProviderName: string
   services: {
     api: ServiceHealthState
     postgres: ServiceHealthState
     redis: ServiceHealthState
     llm: ServiceHealthState
-    salutespeech: ServiceHealthState
+    speechProvider: ServiceHealthState
     worker: ServiceHealthState
     transcriptionService: ServiceHealthState
   }

@@ -20,12 +20,13 @@ type HealthSnapshot = {
     status: ServiceStatus
     service: "api"
     timestamp: string
+    speechProviderName: string
     services: {
       api: ServiceState
       postgres: ServiceState
       redis: ServiceState
       llm: ServiceState
-      salutespeech: ServiceState
+      speechProvider: ServiceState
       worker: ServiceState
       transcriptionService: ServiceState
     }
@@ -168,6 +169,19 @@ export class AppService {
       caCertPath,
       hasCredentials: Boolean(resolvedAuthKey || clientId || clientSecret),
     }
+  }
+
+  private resolveMeetingTranscriptionProvider() {
+    const provider = (process.env.MEETING_TRANSCRIPTION_PROVIDER || "assemblyai")
+      .trim()
+      .toLowerCase()
+    return provider === "salutespeech" ? "salutespeech" : "assemblyai"
+  }
+
+  private meetingTranscriptionProviderName() {
+    return this.resolveMeetingTranscriptionProvider() === "salutespeech"
+      ? "SaluteSpeech"
+      : "AssemblyAI"
   }
 
   private async checkPostgres(): Promise<ServiceState> {
@@ -381,6 +395,68 @@ export class AppService {
     }
   }
 
+  private async checkAssemblyAI(): Promise<ServiceState> {
+    const checkedAt = this.nowIso()
+    const apiKey = process.env.ASSEMBLYAI_API_KEY?.trim()
+    const baseUrl = (process.env.ASSEMBLYAI_BASE_URL || "https://api.eu.assemblyai.com")
+      .trim()
+      .replace(/\/$/, "")
+
+    if (!apiKey) {
+      return {
+        status: "unknown",
+        details: "AssemblyAI не настроен: отсутствует API key",
+        checkedAt,
+      }
+    }
+
+    try {
+      const response = (await this.runWithTimeout(
+        () =>
+          fetch(`${baseUrl}/v2/transcript/00000000-0000-0000-0000-000000000000`, {
+            headers: {
+              Authorization: apiKey,
+              Accept: "application/json",
+            },
+          }),
+        5_000
+      )) as Response
+
+      if (response.ok || response.status === 404) {
+        return {
+          status: "up",
+          details: "AssemblyAI доступен. Проверка авторизации выполнена успешно.",
+          checkedAt,
+        }
+      }
+
+      const rawDetails = await this.readResponseTextSafe(response)
+      const details = this.formatBillingDetails(
+        "AssemblyAI",
+        rawDetails || `HTTP ${response.status}`
+      )
+
+      return {
+        status:
+          response.status === 401 || response.status === 403
+            ? "down"
+            : this.hasBillingIssue(details)
+              ? "down"
+              : "degraded",
+        details,
+        checkedAt,
+      }
+    } catch (error) {
+      const details =
+        error instanceof Error ? this.formatBillingDetails("AssemblyAI", error.message) : "AssemblyAI недоступен"
+      return {
+        status: this.hasBillingIssue(details) ? "down" : "down",
+        details,
+        checkedAt,
+      }
+    }
+  }
+
   private async checkTranscriptionService(): Promise<ServiceState> {
     const checkedAt = this.nowIso()
     const base = (process.env.TRANSCRIPTION_SERVICE_URL || "http://localhost:3002").replace(
@@ -482,11 +558,13 @@ export class AppService {
       checkedAt: timestamp,
     }
 
-    const [postgres, redis, llm, salutespeech, worker, transcriptionService] = await Promise.all([
+    const [postgres, redis, llm, speechProvider, worker, transcriptionService] = await Promise.all([
       this.checkPostgres(),
       this.checkRedis(),
       this.checkLlmProvider(),
-      this.checkSaluteSpeech(),
+      this.resolveMeetingTranscriptionProvider() === "salutespeech"
+        ? this.checkSaluteSpeech()
+        : this.checkAssemblyAI(),
       this.checkWorker(),
       this.checkTranscriptionService(),
     ])
@@ -499,7 +577,7 @@ export class AppService {
       postgres,
       redis,
       llm,
-      salutespeech,
+      speechProvider,
       worker,
       transcriptionService,
     ])
@@ -510,12 +588,13 @@ export class AppService {
         status,
         service: "api",
         timestamp,
+        speechProviderName: this.meetingTranscriptionProviderName(),
         services: {
           api,
           postgres,
           redis,
           llm,
-          salutespeech,
+          speechProvider,
           worker,
           transcriptionService,
         },

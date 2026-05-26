@@ -1017,7 +1017,7 @@ function serviceKindIcon(serviceKey: string) {
   if (serviceKey === "llm") {
     return <SparklesIcon className="size-4 text-muted-foreground" />
   }
-  if (serviceKey === "salutespeech") {
+  if (serviceKey === "speechProvider") {
     return <MicIcon className="size-4 text-muted-foreground" />
   }
   if (serviceKey === "worker") {
@@ -1193,9 +1193,9 @@ export function MeetingsWorkspaceView({
     { key: "redis", title: "Redis", state: systemHealth?.services.redis ?? null },
     { key: "llm", title: "LLM", state: systemHealth?.services.llm ?? null },
     {
-      key: "salutespeech",
-      title: "SaluteSpeech",
-      state: systemHealth?.services.salutespeech ?? null,
+      key: "speechProvider",
+      title: systemHealth?.speechProviderName ?? "Speech STT",
+      state: systemHealth?.services.speechProvider ?? null,
     },
     { key: "worker", title: "Worker", state: systemHealth?.services.worker ?? null },
     {
@@ -1221,7 +1221,11 @@ export function MeetingsWorkspaceView({
       { name: "Redis", state: health.services.redis },
       { name: "Worker", state: health.services.worker, allowUnknown: true },
       { name: "LLM", state: health.services.llm, allowUnknown: true },
-      { name: "SaluteSpeech", state: health.services.salutespeech, allowUnknown: true },
+      {
+        name: health.speechProviderName ?? "Speech STT",
+        state: health.services.speechProvider,
+        allowUnknown: true,
+      },
     ]
 
     for (const service of requiredServices) {

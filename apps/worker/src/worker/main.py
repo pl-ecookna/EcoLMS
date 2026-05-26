@@ -48,8 +48,16 @@ class WorkerConfig:
     openrouter_model: str = "openai/gpt-4.1-mini"
     openrouter_base_url: str = "https://openrouter.ai/api/v1/chat/completions"
     llm_timeout_seconds: float = 120.0
+    meeting_transcription_provider: str = "assemblyai"
     job_queue_key: str = "ecolms:processing-jobs"
     meeting_job_queue_key: str = "ecolms:meeting-jobs"
+    assemblyai_api_key: str = ""
+    assemblyai_base_url: str = "https://api.eu.assemblyai.com"
+    assemblyai_speech_models: tuple[str, ...] = ("universal",)
+    assemblyai_language_code: str = "ru"
+    assemblyai_poll_interval_seconds: float = 5.0
+    assemblyai_timeout_seconds: float = 1800.0
+    assemblyai_audio_url_expires_seconds: int = 1800
     salutespeech_auth_key: str = ""
     salutespeech_oauth_url: str = ""
     salutespeech_rest_url: str = "https://smartspeech.sber.ru/rest/v1"
@@ -141,6 +149,20 @@ def resolve_salutespeech_auth_key() -> str:
     return ""
 
 
+def parse_csv_env(value: str, fallback: tuple[str, ...]) -> tuple[str, ...]:
+    items = [item.strip() for item in value.split(",") if item.strip()]
+    return tuple(items) if items else fallback
+
+
+def normalize_meeting_transcription_provider(value: str) -> str:
+    provider = value.strip().lower() or "assemblyai"
+    if provider not in {"assemblyai", "salutespeech"}:
+        raise RuntimeError(
+            "MEETING_TRANSCRIPTION_PROVIDER должен быть assemblyai или salutespeech."
+        )
+    return provider
+
+
 def load_config() -> WorkerConfig:
     salutespeech_auth_key = resolve_salutespeech_auth_key()
     salutespeech_rest_url = first_defined_env(
@@ -150,6 +172,9 @@ def load_config() -> WorkerConfig:
         "SALUTESPEECH_REST_URL",
         "https://smartspeech.sber.ru/rest/v1",
     ).strip()
+    meeting_transcription_provider = normalize_meeting_transcription_provider(
+        os.getenv("MEETING_TRANSCRIPTION_PROVIDER", "assemblyai")
+    )
     return WorkerConfig(
         api_base_url=normalize_service_url(
             os.getenv("API_BASE_URL"),
@@ -185,8 +210,25 @@ def load_config() -> WorkerConfig:
             "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1/chat/completions"
         ),
         llm_timeout_seconds=float(os.getenv("LLM_TIMEOUT_SECONDS", "120")),
+        meeting_transcription_provider=meeting_transcription_provider,
         job_queue_key=os.getenv("WORKER_JOB_QUEUE_KEY", "ecolms:processing-jobs"),
         meeting_job_queue_key=os.getenv("WORKER_MEETING_JOB_QUEUE_KEY", "ecolms:meeting-jobs"),
+        assemblyai_api_key=os.getenv("ASSEMBLYAI_API_KEY", "").strip(),
+        assemblyai_base_url=os.getenv(
+            "ASSEMBLYAI_BASE_URL", "https://api.eu.assemblyai.com"
+        ).strip().rstrip("/"),
+        assemblyai_speech_models=parse_csv_env(
+            os.getenv("ASSEMBLYAI_SPEECH_MODELS", "universal"),
+            ("universal",),
+        ),
+        assemblyai_language_code=os.getenv("ASSEMBLYAI_LANGUAGE_CODE", "ru").strip() or "ru",
+        assemblyai_poll_interval_seconds=float(
+            os.getenv("ASSEMBLYAI_POLL_INTERVAL_SECONDS", "5")
+        ),
+        assemblyai_timeout_seconds=float(os.getenv("ASSEMBLYAI_TIMEOUT_SECONDS", "1800")),
+        assemblyai_audio_url_expires_seconds=int(
+            os.getenv("ASSEMBLYAI_AUDIO_URL_EXPIRES_SECONDS", "1800")
+        ),
         salutespeech_auth_key=salutespeech_auth_key,
         salutespeech_oauth_url=first_defined_env(
             "SALUTESPEECH_OAUTH_URL",
@@ -581,12 +623,16 @@ def normalize_provider_error(provider: str, raw_error: str) -> str:
         "недостаточно кредитов",
         "исчерпан лимит",
         "квота",
+        "rate limit",
+        "too many requests",
         '"status":402',
         "http 402",
     ]
     if any(pattern in normalized for pattern in billing_patterns):
         if provider == "salutespeech":
             return "SaluteSpeech недоступен: недостаточно средств или исчерпана квота."
+        if provider == "assemblyai":
+            return "AssemblyAI недоступен: недостаточно средств, исчерпана квота или превышен лимит запросов."
         return f"{provider} недоступен: недостаточно средств или исчерпана квота."
     return raw_error
 
@@ -1062,6 +1108,14 @@ def s3_client(config: WorkerConfig) -> Any:
                 "payload_signing_enabled": False,
             },
         ),
+    )
+
+
+def s3_presigned_get_url(config: WorkerConfig, storage_key: str, expires_in_seconds: int) -> str:
+    return s3_client(config).generate_presigned_url(
+        "get_object",
+        Params={"Bucket": config.s3_bucket, "Key": storage_key},
+        ExpiresIn=max(60, expires_in_seconds),
     )
 
 
@@ -2232,7 +2286,7 @@ def prepare_meeting_audio(
             raise RuntimeError(f"FFmpeg audio preparation failed: {details or 'unknown error'}")
         with open(output_path, "rb") as file:
             audio_bytes = file.read()
-        audio_storage_key: str | None = f"meetings/{source_file['meeting_id']}/derived/prepared-audio.wav"
+        audio_storage_key: str | None = f"meetings/{source_file['meeting_id']}/derived/prepared-audio.ogg"
         try:
             upload_s3_object_bytes(
                 config,
@@ -2276,6 +2330,170 @@ def prepare_meeting_audio(
             os.unlink(output_path)
         except OSError:
             pass
+
+
+def assemblyai_request(
+    url: str,
+    *,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+    data: bytes | None = None,
+    timeout: float = 60.0,
+) -> dict[str, Any]:
+    req = urlrequest.Request(
+        url,
+        method=method,
+        data=data,
+        headers=headers or {},
+    )
+    try:
+        with urlrequest.urlopen(
+            req,
+            timeout=timeout,
+            context=llm_ssl_context(),
+        ) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+    except urlerror.HTTPError as exc:
+        try:
+            details = exc.read().decode("utf-8", errors="ignore").strip()
+        except Exception:
+            details = ""
+        message = normalize_provider_error(
+            "assemblyai",
+            f"HTTP {exc.code}{f': {details}' if details else ''}",
+        )
+        raise RuntimeError(message) from exc
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        snippet = raw[:500].replace("\n", "\\n")
+        raise RuntimeError(f"AssemblyAI вернул невалидный JSON. body={snippet}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("AssemblyAI вернул невалидный JSON-тип.")
+    return payload
+
+
+def create_assemblyai_transcript(
+    config: WorkerConfig,
+    audio_url: str,
+) -> str:
+    payload: dict[str, Any] = {
+        "audio_url": audio_url,
+        "speaker_labels": True,
+        "language_code": config.assemblyai_language_code,
+        "speech_models": list(config.assemblyai_speech_models),
+    }
+    response = assemblyai_request(
+        f"{config.assemblyai_base_url}/v2/transcript",
+        method="POST",
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": config.assemblyai_api_key,
+            "Content-Type": "application/json; charset=utf-8",
+            "Accept": "application/json",
+        },
+        timeout=60.0,
+    )
+    transcript_id = str(response.get("id") or "").strip()
+    if not transcript_id:
+        raise RuntimeError("AssemblyAI не вернул id транскрипта.")
+    return transcript_id
+
+
+def get_assemblyai_transcript(
+    config: WorkerConfig,
+    transcript_id: str,
+) -> dict[str, Any]:
+    return assemblyai_request(
+        f"{config.assemblyai_base_url}/v2/transcript/{transcript_id}",
+        headers={
+            "Authorization": config.assemblyai_api_key,
+            "Accept": "application/json",
+        },
+        timeout=60.0,
+    )
+
+
+def parse_assemblyai_segments(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    utterances = payload.get("utterances")
+    if not isinstance(utterances, list):
+        raise RuntimeError("AssemblyAI не вернул utterances.")
+
+    speaker_map: dict[str, int] = {}
+    segments: list[dict[str, Any]] = []
+
+    for item in utterances:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        start_ms = to_milliseconds(item.get("start"))
+        end_ms = to_milliseconds(item.get("end"))
+        if not text or start_ms is None or end_ms is None or end_ms < start_ms:
+            continue
+
+        speaker_raw = str(item.get("speaker") or "").strip() or "unknown"
+        if speaker_raw not in speaker_map:
+            speaker_map[speaker_raw] = len(speaker_map)
+
+        segments.append(
+            {
+                "speaker_id": speaker_map[speaker_raw],
+                "text": text,
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "confidence": extract_float(item.get("confidence")),
+                "provider_payload_json": item,
+            }
+        )
+
+    if not segments:
+        raise RuntimeError("AssemblyAI не вернул diarized utterances.")
+
+    segments.sort(key=lambda item: (item["start_ms"], item["end_ms"]))
+    return segments
+
+
+def transcribe_meeting_with_assemblyai(
+    config: WorkerConfig,
+    prepared_audio: dict[str, Any],
+    source_file: dict[str, Any],
+) -> dict[str, Any]:
+    if not config.assemblyai_api_key:
+        raise RuntimeError("ASSEMBLYAI_API_KEY не задан.")
+
+    storage_key = str(prepared_audio.get("audio_storage_key") or "").strip()
+    if not storage_key:
+        storage_key = str(source_file["storage_key"]).strip()
+
+    audio_url = s3_presigned_get_url(
+        config,
+        storage_key,
+        config.assemblyai_audio_url_expires_seconds,
+    )
+    transcript_id = create_assemblyai_transcript(config, audio_url)
+
+    started_at = time.time()
+    while True:
+        payload = get_assemblyai_transcript(config, transcript_id)
+        status = str(payload.get("status") or "").strip().lower()
+        if status == "completed":
+            return {
+                "transcript_id": transcript_id,
+                "audio_url": audio_url,
+                "result_payload": payload,
+            }
+        if status in {"error", "failed"}:
+            raise RuntimeError(
+                str(
+                    payload.get("error")
+                    or payload.get("message")
+                    or "AssemblyAI transcription failed"
+                )
+            )
+        if time.time() - started_at > config.assemblyai_timeout_seconds:
+            raise RuntimeError("AssemblyAI task timed out")
+        time.sleep(max(1.0, config.assemblyai_poll_interval_seconds))
 
 
 def transcribe_meeting_with_salutespeech(
@@ -2322,6 +2540,16 @@ def transcribe_meeting_with_salutespeech(
         if time.time() - started_at > config.salutespeech_timeout_seconds:
             raise RuntimeError("SaluteSpeech task timed out")
         time.sleep(max(1.0, config.salutespeech_poll_interval_seconds))
+
+
+def transcribe_meeting(
+    config: WorkerConfig,
+    prepared_audio: dict[str, Any],
+    source_file: dict[str, Any],
+) -> dict[str, Any]:
+    if config.meeting_transcription_provider == "assemblyai":
+        return transcribe_meeting_with_assemblyai(config, prepared_audio, source_file)
+    return transcribe_meeting_with_salutespeech(config, prepared_audio)
 
 
 def handle_meeting_audio_prepared(
@@ -2374,10 +2602,11 @@ def handle_meeting_transcript_compiled(
     source_file: dict[str, Any],
 ) -> dict[str, Any]:
     prepared = prepare_meeting_audio(config, source_file)
-    raw_result = transcribe_meeting_with_salutespeech(config, prepared)
-    diarized_segments = parse_salutespeech_segments(
-        raw_result["result_payload"]
-    )
+    raw_result = transcribe_meeting(config, prepared, source_file)
+    if config.meeting_transcription_provider == "assemblyai":
+        diarized_segments = parse_assemblyai_segments(raw_result["result_payload"])
+    else:
+        diarized_segments = parse_salutespeech_segments(raw_result["result_payload"])
     speakers, segments = upsert_meeting_transcript(conn, meeting["id"], diarized_segments)
     transcript_markdown = build_meeting_transcript_markdown(
         str(meeting["title"]),
@@ -2421,9 +2650,17 @@ def handle_meeting_transcript_compiled(
         (prepared["duration_seconds"], len(speakers), meeting["id"]),
     )
     return {
-        "provider": "salutespeech",
-        "model": config.salutespeech_model,
-        "language": config.salutespeech_language,
+        "provider": config.meeting_transcription_provider,
+        "model": (
+            list(config.assemblyai_speech_models)[0]
+            if config.meeting_transcription_provider == "assemblyai"
+            else config.salutespeech_model
+        ),
+        "language": (
+            config.assemblyai_language_code
+            if config.meeting_transcription_provider == "assemblyai"
+            else config.salutespeech_language
+        ),
         "speakerSeparation": True,
         "audioStorageKey": prepared["audio_storage_key"],
         "sampleRate": prepared["sample_rate"],
@@ -2431,7 +2668,9 @@ def handle_meeting_transcript_compiled(
         "durationSeconds": prepared["duration_seconds"],
         "speakersCount": len(speakers),
         "segmentsCount": len(segments),
-        "salutespeech": raw_result,
+        **{
+            config.meeting_transcription_provider: raw_result,
+        },
     }
 
 

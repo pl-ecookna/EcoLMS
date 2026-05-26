@@ -10,7 +10,7 @@
 - извлекает текст из `pdf`, `docx`, `pptx`, `rtf` и текстовых файлов;
 - отправляет аудио и видео в `transcription-service`;
 - подготавливает аудио встреч через `ffmpeg/ffprobe`;
-- отправляет подготовленный звук в `SaluteSpeech` и нормализует diarized transcript;
+- отправляет подготовленный звук в `AssemblyAI` или `SaluteSpeech` и нормализует diarized transcript;
 - готовит markdown для этапов `source_compiled`, `course_outline`, `course_content`, `course_test`;
 - генерирует `meeting_summary`, `meeting_protocol`, `meeting_actions`;
 - вызывает OpenAI или OpenRouter для анализа и генерации;
@@ -40,11 +40,12 @@
 - `REDIS_URL`
 - `S3_*`
 - `LLM_PRIMARY_PROVIDER` и набор переменных только для выбранного провайдера: `OPENAI_*` или `OPENROUTER_*`
-- для модуля `meetings`: `WORKER_MEETING_JOB_QUEUE_KEY` и `SALUTESPEECH_*`
+- для модуля `meetings`: `WORKER_MEETING_JOB_QUEUE_KEY`, `MEETING_TRANSCRIPTION_PROVIDER` и переменные выбранного STT-провайдера
 
 Для обработки встреч в окружении также должен быть доступен `ffmpeg`.
-Рекомендуемый путь для Sber TLS: `SALUTESPEECH_CA_CERT_PATH=certs/russiantrustedca.pem`.
+Для `SaluteSpeech` рекомендуемый путь для Sber TLS: `SALUTESPEECH_CA_CERT_PATH=certs/russiantrustedca.pem`.
 Для dev-среды при проблемах с TLS-цепочкой можно временно включить `SALUTESPEECH_SSL_NO_VERIFY=true`.
+Для `AssemblyAI` по умолчанию используется `ASSEMBLYAI_BASE_URL=https://api.eu.assemblyai.com` и доступ к файлу через временный `S3 presigned URL`.
 Для LLM-вызовов (`OpenAI`/`OpenRouter`) worker использует trust store из `certifi`.
 Prompt templates для `lms` и `meetings` worker читает из таблицы `llm_prompts` в PostgreSQL.
 Если запись в таблице отсутствует, worker дозаписывает дефолтный prompt из кода и использует его как seed.
@@ -52,10 +53,10 @@ Prompt templates для `lms` и `meetings` worker читает из табли�
 `decisions`, `actionItems` и `openQuestions`, если LLM вернул валидный JSON, но оставил
 поле `markdown` пустым.
 
-Текущий формат подготовки аудио для `SaluteSpeech` в V1:
+Текущий формат подготовки аудио остаётся совместимым с `SaluteSpeech` и `AssemblyAI`:
 
 - `OPUS`, `48kHz`, `mono`;
-- контейнер `ogg` (`audio_encoding=OPUS` в запросе).
+- контейнер `ogg` (`audio_encoding=OPUS` в запросе для `SaluteSpeech`).
 
 ## Ключевой файл
 

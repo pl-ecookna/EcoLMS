@@ -1,6 +1,6 @@
 # EcoLMS
 
-EcoLMS — внутренняя платформа для работы с контентом из медиа- и документных источников. Сейчас в репозитории уже реализован workflow генерации обучающих курсов, а для `meetings` добавлены backend API, схема БД, worker pipeline под `SaluteSpeech` и UI-раздел `/meetings`. Репозиторий организован как `pnpm`-монорепозиторий с четырьмя приложениями: `web`, `api`, `worker` и `transcription-service`.
+EcoLMS — внутренняя платформа для работы с контентом из медиа- и документных источников. Сейчас в репозитории уже реализован workflow генерации обучающих курсов, а для `meetings` добавлены backend API, схема БД, worker pipeline с `AssemblyAI` как основным провайдером распознавания и UI-раздел `/meetings`. `SaluteSpeech` сохранён как альтернативный провайдер, переключение делается через `env`. Репозиторий организован как `pnpm`-монорепозиторий с четырьмя приложениями: `web`, `api`, `worker` и `transcription-service`.
 
 ## Актуальный стек
 
@@ -55,7 +55,7 @@ Browser
 - редактор промптов вынесен на отдельную страницу `/prompts` и доступен из LMS и `meetings`;
 - добавление новой записи встречи прямо из `/meetings`: создать карточку, загрузить один файл и сразу запустить обработку;
 - в `meetings` и LMS используется единый паттерн уведомлений: компактные toast-like alerts в правом нижнем углу;
-- экран `meetings` показывает доступность `LLM`, `SaluteSpeech`, баз данных и фоновых модулей через health badge, как в LMS;
+- экран `meetings` показывает доступность `LLM`, активного STT-провайдера, баз данных и фоновых модулей через health badge, как в LMS;
 - в левом списке встреч есть меню `...` с действиями `Информация` и `Удалить`;
 - в хедере экрана `/meetings` есть кнопка возврата к основному интерфейсу LMS;
 - по пункту `Информация` открывается `Sheet` с техническими деталями, `jobs` и артефактами;
@@ -71,7 +71,7 @@ Browser
 
 - глобальный префикс маршрутов: `/api`;
 - контроллеры: `projects`, `uploads`, `jobs`, `artifacts`, `health`, `prompts`;
-- health-check агрегирует статус `api`, `postgres`, `redis`, `llm`, `salutespeech`, `worker`, `transcription-service`;
+- health-check агрегирует статус `api`, `postgres`, `redis`, `llm`, `speechProvider`, `worker`, `transcription-service`;
 - хранение и миграция минимальной схемы БД выполняются прямо из `PostgresService`;
 - таблица `llm_prompts` хранит редактируемые prompt templates для `lms` и `meetings`;
 - очередь реализована через Redis list, без BullMQ;
@@ -85,7 +85,7 @@ Browser
 - вызов transcription-service для аудио/видео;
 - генерация `source_compiled`, `course_outline`, `course_content`, `course_test`;
 - вызов только одного выбранного LLM-провайдера (`OpenAI` или `OpenRouter`) по `LLM_PRIMARY_PROVIDER`.
-- ошибки `quota / balance / payment required` от LLM и `SaluteSpeech` нормализуются в человекочитаемый текст для UI и job logs.
+- ошибки `quota / balance / payment required` от LLM и активного STT-провайдера нормализуются в человекочитаемый текст для UI и job logs.
 - prompt templates для `lms` и `meetings` читаются из PostgreSQL (`llm_prompts`), а встроенные prompt definitions используются как seed по умолчанию.
 
 ### `apps/transcription-service`
@@ -114,7 +114,7 @@ Browser
 - отдельный bounded context, не смешанный с workflow курсов;
 - язык встреч в V1: только русский;
 - один файл на встречу;
-- целевой провайдер распознавания и диаризации: `SaluteSpeech`;
+- целевой провайдер распознавания и диаризации: `AssemblyAI`, `SaluteSpeech` сохранён как альтернативный;
 - канонический результат хранится в PostgreSQL, а сырой ответ провайдера сохраняется в `job result_json`;
 - ручная правка speaker labels предусмотрена в UI и модели данных;
 - UI-раздел `/meetings` уже добавлен и показывает список встреч, карточку встречи и единый markdown-файл.
@@ -125,7 +125,7 @@ Browser
 - REST-маршруты `/api/meetings/*`;
 - отдельная Redis-очередь `ecolms:meeting-jobs`;
 - worker pipeline `audio_prepared -> transcript_compiled -> meeting_summary -> meeting_protocol -> meeting_actions`;
-- интеграция worker с `SaluteSpeech` через async API и нормализацию diarized transcript в PostgreSQL.
+- интеграция worker с `AssemblyAI` через async API и нормализацию diarized transcript в PostgreSQL, с поддержкой `SaluteSpeech` как альтернативы.
 
 ## Локальный запуск
 
@@ -170,6 +170,14 @@ Browser
 - `OPENROUTER_MODEL`
 - `LLM_TIMEOUT_SECONDS`
 - `TRANSCRIPTION_SERVICE_URL`
+- `MEETING_TRANSCRIPTION_PROVIDER`
+- `ASSEMBLYAI_API_KEY`
+- `ASSEMBLYAI_BASE_URL`
+- `ASSEMBLYAI_SPEECH_MODELS`
+- `ASSEMBLYAI_LANGUAGE_CODE`
+- `ASSEMBLYAI_POLL_INTERVAL_SECONDS`
+- `ASSEMBLYAI_TIMEOUT_SECONDS`
+- `ASSEMBLYAI_AUDIO_URL_EXPIRES_SECONDS`
 - `WHISPER_MODEL_SIZE`
 - `WHISPER_COMPUTE_TYPE`
 - `WORKER_JOB_QUEUE_KEY`
