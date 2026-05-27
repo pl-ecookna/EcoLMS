@@ -3147,14 +3147,15 @@ def process_meeting_job(config: WorkerConfig, job_message: dict[str, Any]) -> No
 
         set_meeting_job_processing(status_conn, job["id"])
         with conn.transaction():
-            conn.execute(
-                """
-                update meeting_source_files
-                set processing_status = 'processing'
-                where id = %s
-                """,
-                (source_file["id"],),
-            )
+            if job["stage"] in {"audio_prepared", "transcript_compiled"}:
+                conn.execute(
+                    """
+                    update meeting_source_files
+                    set processing_status = 'processing'
+                    where id = %s
+                    """,
+                    (source_file["id"],),
+                )
             conn.execute(
                 """
                 update meetings

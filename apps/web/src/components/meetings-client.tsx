@@ -286,7 +286,9 @@ function getStageOutputUpdatedAt(
   stage: MeetingStageId
 ) {
   if (stage === "audio_prepared") {
-    return meeting.sourceFile?.processingStatus === "done"
+    return meeting.sourceFile?.audioStorageKey
+      ? toTime(meeting.sourceFile.createdAt)
+      : meeting.sourceFile?.processingStatus === "done"
       ? toTime(meeting.sourceFile.createdAt)
       : 0
   }
@@ -308,7 +310,7 @@ function getStageOutputUpdatedAt(
 
 function hasStageOutput(meeting: MeetingDetailRecord, stage: MeetingStageId) {
   if (stage === "audio_prepared") {
-    return meeting.sourceFile?.processingStatus === "done"
+    return Boolean(meeting.sourceFile?.audioStorageKey) || meeting.sourceFile?.processingStatus === "done"
   }
   if (stage === "transcript_compiled") {
     return meeting.segments.length > 0 || Boolean(getArtifact(meeting, stage)?.contentMd?.trim())
