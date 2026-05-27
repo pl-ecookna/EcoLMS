@@ -1105,6 +1105,9 @@ def s3_client(config: WorkerConfig) -> Any:
         region_name=config.s3_region,
         config=Config(
             signature_version="s3v4",
+            connect_timeout=10,
+            read_timeout=60,
+            retries={"max_attempts": 2, "mode": "standard"},
             s3={
                 "addressing_style": "path",
                 # Some S3-compatible providers reject signed payload hashing
