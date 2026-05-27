@@ -1481,19 +1481,31 @@ export function MeetingsWorkspaceView({
                   <div className="flex flex-col gap-2 p-2">
                     {meetingsPageState.items.map((meeting) => {
                       const isSelected = meeting.id === selectedMeetingId
+                      const meetingHref = `/meetings?page=${currentPage}&meeting=${meeting.id}`
                       return (
                         <div
                           key={meeting.id}
+                          role="link"
+                          tabIndex={0}
+                          aria-label={`Открыть встречу ${meeting.title}`}
                           className={cn(
-                            "rounded-2xl border px-3 py-2.5 transition-colors hover:bg-muted/35",
+                            "cursor-pointer rounded-2xl border px-3 py-2.5 transition-colors hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
                             isSelected
                               ? "border-primary/30 bg-muted/40 shadow-sm"
                               : "border-border/70 bg-card/95"
                           )}
+                          onClick={() => router.push(meetingHref)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault()
+                              router.push(meetingHref)
+                            }
+                          }}
                         >
                           <div className="flex items-start justify-between gap-3">
                             <Link
-                              href={`/meetings?page=${currentPage}&meeting=${meeting.id}`}
+                              href={meetingHref}
+                              onClick={(event) => event.stopPropagation()}
                               className="min-w-0 flex-1 space-y-1 text-left"
                             >
                               <div className="truncate text-sm font-semibold">{meeting.title}</div>
