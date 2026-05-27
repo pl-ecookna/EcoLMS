@@ -910,6 +910,32 @@ function TranscriptLoadingState() {
   )
 }
 
+function MeetingDetailSkeleton() {
+  return (
+    <div className="space-y-4 p-4">
+      <div className="rounded-3xl border border-border/70 bg-card/95 p-4 shadow-sm">
+        <Skeleton className="h-8 w-1/3" />
+        <Skeleton className="mt-3 h-4 w-3/5" />
+        <Skeleton className="mt-2 h-4 w-2/5" />
+      </div>
+      <div className="rounded-3xl border border-border/70 bg-card/95 p-4 shadow-sm">
+        <div className="flex gap-2">
+          <Skeleton className="h-10 w-28 rounded-full" />
+          <Skeleton className="h-10 w-32 rounded-full" />
+          <Skeleton className="h-10 w-28 rounded-full" />
+        </div>
+        <div className="mt-4 space-y-3">
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-11/12" />
+          <Skeleton className="h-4 w-10/12" />
+          <Skeleton className="h-4 w-9/12" />
+          <Skeleton className="h-4 w-8/12" />
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function MeetingCardProgress({
   meeting,
 }: {
@@ -1063,6 +1089,9 @@ export function MeetingsWorkspaceView({
     selectedMeetingId ?? pageData.items[0]?.id ?? null
   )
   const [selectedMeetingState, setSelectedMeetingState] = useState(selectedMeeting)
+  const [isSelectedMeetingLoading, setIsSelectedMeetingLoading] = useState(
+    Boolean(selectedMeetingId && !selectedMeeting)
+  )
   const [hasInitializedDefaultSelection, setHasInitializedDefaultSelection] = useState(
     Boolean(selectedMeetingId)
   )
@@ -1072,10 +1101,14 @@ export function MeetingsWorkspaceView({
   }, [pageData])
 
   useEffect(() => {
-    if (selectedMeeting) {
+    if (selectedMeeting && selectedMeeting.id === activeMeetingId) {
       setSelectedMeetingState(selectedMeeting)
+      setIsSelectedMeetingLoading(false)
+    } else if (!selectedMeetingId) {
+      setSelectedMeetingState(null)
+      setIsSelectedMeetingLoading(false)
     }
-  }, [selectedMeeting])
+  }, [activeMeetingId, selectedMeeting, selectedMeetingId])
 
   useEffect(() => {
     if (selectedMeetingId) {
@@ -1324,12 +1357,14 @@ export function MeetingsWorkspaceView({
   const handleSelectMeeting = useCallback(
     async (meetingId: string) => {
       const meetingHref = `/meetings?page=${currentPage}&meeting=${meetingId}`
+      setIsSelectedMeetingLoading(true)
       setActiveMeetingId(meetingId)
       router.push(meetingHref)
 
       try {
         const nextMeeting = await getMeeting(meetingId)
         setSelectedMeetingState(nextMeeting)
+        setIsSelectedMeetingLoading(false)
       } catch {
         // keep optimistic active state; server props will catch up on next render
       }
@@ -1350,6 +1385,12 @@ export function MeetingsWorkspaceView({
     setHasInitializedDefaultSelection(true)
     void handleSelectMeeting(firstMeetingId)
   }, [hasInitializedDefaultSelection, handleSelectMeeting, meetingsPageState.items])
+
+  useEffect(() => {
+    if (selectedMeeting?.id === activeMeetingId) {
+      setIsSelectedMeetingLoading(false)
+    }
+  }, [activeMeetingId, selectedMeeting?.id])
 
   async function handleCreateMeeting() {
     const trimmedTitle = meetingTitle.trim()
@@ -1707,7 +1748,11 @@ export function MeetingsWorkspaceView({
               </div>
             </CardHeader>
             <CardContent className="min-h-0 flex-1 p-0">
-              {selectedMeetingState ? (
+              {isSelectedMeetingLoading ? (
+                <ScrollArea className="h-[700px]">
+                  <MeetingDetailSkeleton />
+                </ScrollArea>
+              ) : selectedMeetingState ? (
                 <ScrollArea className="h-[700px]">
                   <MeetingDetailView
                     meetingId={selectedMeetingState.id}
