@@ -60,6 +60,8 @@ Prompt templates для `lms` и `meetings` worker читает из табли�
 - `OPUS`, `48kHz`, `mono`;
 - контейнер `ogg` (`audio_encoding=OPUS` в запросе для `SaluteSpeech`).
 
+Если исходник уже содержит `opus`-аудио в `webm`, worker старается сделать быстрый `remux` без перекодирования; при долгом `ffmpeg` heartbeat обновляется периодически, чтобы job не выглядела зависшей.
+
 ## Ключевой файл
 
 - [apps/worker/src/worker/main.py](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/apps/worker/src/worker/main.py)

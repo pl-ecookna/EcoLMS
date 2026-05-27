@@ -2244,7 +2244,7 @@ def upsert_meeting_transcript(
     return speakers, inserted_segments
 
 
-def ffprobe_audio_details(source_path: str) -> tuple[int, int, float]:
+def ffprobe_audio_details(source_path: str) -> tuple[str, int, float]:
     try:
         result = subprocess.run(
             [
@@ -2254,7 +2254,7 @@ def ffprobe_audio_details(source_path: str) -> tuple[int, int, float]:
                 "-select_streams",
                 "a:0",
                 "-show_entries",
-                "stream=channels",
+                "stream=codec_name,channels",
                 "-show_entries",
                 "format=duration",
                 "-of",
@@ -2272,13 +2272,51 @@ def ffprobe_audio_details(source_path: str) -> tuple[int, int, float]:
             f"ffprobe failed: {(result.stderr or result.stdout or '').strip()}"
         )
     payload = json.loads(result.stdout or "{}")
-    channels = int(
-        payload.get("streams", [{}])[0].get("channels") or 1
-    )
+    stream = payload.get("streams", [{}])[0]
+    codec_name = str(stream.get("codec_name") or "").strip().lower()
+    channels = int(stream.get("channels") or 1)
     duration = float(payload.get("format", {}).get("duration") or 0.0)
-    # Для V1 diarization в SaluteSpeech используем моно-канал.
-    target_channels = 1
-    return channels, target_channels, duration
+    return codec_name, channels, duration
+
+
+def run_ffmpeg_with_heartbeat(
+    command: list[str],
+    *,
+    timeout_seconds: float,
+    heartbeat_conn: psycopg.Connection,
+    job_id: str,
+    meeting_id: str,
+    storage_key: str | None,
+) -> subprocess.CompletedProcess[str]:
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    heartbeat_interval_seconds = 10.0
+    deadline = time.monotonic() + timeout_seconds
+
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            process.kill()
+            stdout, stderr = process.communicate()
+            raise RuntimeError("FFmpeg audio preparation timed out.")
+
+        try:
+            stdout, stderr = process.communicate(
+                timeout=min(heartbeat_interval_seconds, remaining)
+            )
+            return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+        except subprocess.TimeoutExpired:
+            touch_meeting_job_heartbeat(heartbeat_conn, job_id)
+            log_worker_event(
+                "meeting-audio-ffmpeg-heartbeat",
+                jobId=job_id,
+                meetingId=meeting_id,
+                storageKey=storage_key,
+            )
 
 
 def upload_s3_object_bytes(
@@ -2293,7 +2331,10 @@ def upload_s3_object_bytes(
 
 
 def prepare_meeting_audio(
-    config: WorkerConfig, source_file: dict[str, Any]
+    config: WorkerConfig,
+    source_file: dict[str, Any],
+    heartbeat_conn: psycopg.Connection,
+    job_id: str,
 ) -> dict[str, Any]:
     log_worker_event(
         "meeting-audio-download-start",
@@ -2320,52 +2361,69 @@ def prepare_meeting_audio(
             meetingId=source_file.get("meeting_id"),
             storageKey=source_file.get("storage_key"),
         )
-        _, target_channels, duration = ffprobe_audio_details(source_path)
+        source_codec, target_channels, duration = ffprobe_audio_details(source_path)
         log_worker_event(
             "meeting-audio-ffprobe-done",
             meetingId=source_file.get("meeting_id"),
             storageKey=source_file.get("storage_key"),
+            sourceCodec=source_codec,
             durationSeconds=duration,
             targetChannels=target_channels,
         )
-        command = [
-            "ffmpeg",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-y",
-            "-i",
-            source_path,
-            "-vn",
-            "-ac",
-            str(target_channels),
-            "-ar",
-            "48000",
-            "-c:a",
-            "libopus",
-            "-b:a",
-            "48k",
-            "-f",
-            "ogg",
-            output_path,
-        ]
+        fast_path_copy = source_codec == "opus" and target_channels <= 2
+        if fast_path_copy:
+            command = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                source_path,
+                "-vn",
+                "-c:a",
+                "copy",
+                "-f",
+                "ogg",
+                output_path,
+            ]
+        else:
+            command = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                source_path,
+                "-vn",
+                "-ac",
+                str(target_channels),
+                "-ar",
+                "48000",
+                "-c:a",
+                "libopus",
+                "-b:a",
+                "48k",
+                "-f",
+                "ogg",
+                output_path,
+            ]
         log_worker_event(
             "meeting-audio-ffmpeg-start",
             meetingId=source_file.get("meeting_id"),
             storageKey=source_file.get("storage_key"),
             timeoutSeconds=config.meeting_audio_prep_timeout_seconds,
+            mode="copy" if fast_path_copy else "transcode",
         )
-        try:
-            result = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=config.meeting_audio_prep_timeout_seconds,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(
-                "FFmpeg audio preparation timed out."
-            ) from exc
+        result = run_ffmpeg_with_heartbeat(
+            command,
+            timeout_seconds=config.meeting_audio_prep_timeout_seconds,
+            heartbeat_conn=heartbeat_conn,
+            job_id=job_id,
+            meeting_id=str(source_file.get("meeting_id")),
+            storage_key=str(source_file.get("storage_key")) if source_file.get("storage_key") else None,
+        )
         if result.returncode != 0:
             details = (result.stderr or result.stdout or "").strip()
             raise RuntimeError(f"FFmpeg audio preparation failed: {details or 'unknown error'}")
@@ -2373,6 +2431,7 @@ def prepare_meeting_audio(
             "meeting-audio-ffmpeg-done",
             meetingId=source_file.get("meeting_id"),
             storageKey=source_file.get("storage_key"),
+            mode="copy" if fast_path_copy else "transcode",
         )
         with open(output_path, "rb") as file:
             audio_bytes = file.read()
@@ -2707,8 +2766,10 @@ def handle_meeting_audio_prepared(
     config: WorkerConfig,
     meeting: dict[str, Any],
     source_file: dict[str, Any],
+    heartbeat_conn: psycopg.Connection,
+    job_id: str,
 ) -> dict[str, Any]:
-    prepared = prepare_meeting_audio(config, source_file)
+    prepared = prepare_meeting_audio(config, source_file, heartbeat_conn, job_id)
     conn.execute(
         """
         update meeting_source_files
@@ -2766,7 +2827,7 @@ def handle_meeting_transcript_compiled(
         jobId=job_id,
         meetingId=meeting["id"],
     )
-    prepared = prepare_meeting_audio(config, source_file)
+    prepared = prepare_meeting_audio(config, source_file, heartbeat_conn, job_id)
     touch_meeting_job_heartbeat(heartbeat_conn, job_id)
     log_worker_event(
         "meeting-audio-prepare-done",
@@ -3047,7 +3108,14 @@ def process_meeting_job(config: WorkerConfig, job_message: dict[str, Any]) -> No
             )
 
             if job["stage"] == "audio_prepared":
-                metadata = handle_meeting_audio_prepared(conn, config, meeting, source_file)
+                metadata = handle_meeting_audio_prepared(
+                    conn,
+                    config,
+                    meeting,
+                    source_file,
+                    status_conn,
+                    job["id"],
+                )
             elif job["stage"] == "transcript_compiled":
                 metadata = handle_meeting_transcript_compiled(
                     conn,
