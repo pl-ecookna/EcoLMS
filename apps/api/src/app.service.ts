@@ -490,14 +490,31 @@ export class AppService {
     const checkedAt = this.nowIso()
     try {
       const processingResult = await this.db.query<{ count: string }>(
-        `select count(*)::text as count from processing_jobs where status = 'processing'`
+        `
+        select count(*)::text as count
+        from (
+          select 1
+          from processing_jobs
+          where status = 'processing'
+          union all
+          select 1
+          from meeting_jobs
+          where status = 'processing'
+        ) jobs
+        `
       )
       const processingCount = Number(processingResult.rows[0]?.count ?? 0)
 
       const lastActivityResult = await this.db.query<{ last_activity: string | null }>(
         `
-        select max(coalesce(finished_at, started_at, created_at))::text as last_activity
-        from processing_jobs
+        select max(last_activity)::text as last_activity
+        from (
+          select max(coalesce(processing_heartbeat_at, finished_at, started_at, created_at)) as last_activity
+          from processing_jobs
+          union all
+          select max(coalesce(processing_heartbeat_at, finished_at, started_at, created_at)) as last_activity
+          from meeting_jobs
+        ) activity
         `
       )
       const lastActivityRaw = lastActivityResult.rows[0]?.last_activity
