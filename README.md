@@ -65,7 +65,7 @@ Browser
 - запуск генерации отдельных этапов и цепочки этапов;
 - просмотр и редактирование Markdown-артефактов;
 - proxy-route для запросов к backend: [apps/web/src/app/api/[...path]/route.ts](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/apps/web/src/app/api/[...path]/route.ts);
-- proxy-route для `PUT` загрузки в S3 по signed URL: [apps/web/src/app/api/s3-upload/route.ts](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/apps/web/src/app/api/s3-upload/route.ts).
+- загрузка исходников и записей встречи идёт напрямую в signed S3 URL, без отдельного proxy-route для `PUT`.
 
 ### `apps/api`
 

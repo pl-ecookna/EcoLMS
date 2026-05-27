@@ -29,7 +29,7 @@
 - Страница приложения: [apps/web/src/app/page.tsx](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/apps/web/src/app/page.tsx)
 - Клиент API: [apps/web/src/lib/ecolms-api.ts](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/apps/web/src/lib/ecolms-api.ts)
 - Внутренний proxy для backend-запросов: [apps/web/src/app/api/[...path]/route.ts](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/apps/web/src/app/api/[...path]/route.ts)
-- Proxy для `PUT` загрузки частей файла в S3: [apps/web/src/app/api/s3-upload/route.ts](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/apps/web/src/app/api/s3-upload/route.ts)
+- Загрузка файлов идёт напрямую в signed S3 URL, без отдельного proxy для `PUT` частей.
 
 ## Запуск
 
