@@ -413,7 +413,7 @@ export class AppService {
     try {
       const response = (await this.runWithTimeout(
         () =>
-          fetch(`${baseUrl}/v2/transcript/00000000-0000-0000-0000-000000000000`, {
+          fetch(`${baseUrl}/v2/transcript?limit=1`, {
             headers: {
               Authorization: apiKey,
               Accept: "application/json",
@@ -422,10 +422,10 @@ export class AppService {
         5_000
       )) as Response
 
-      if (response.ok || response.status === 404) {
+      if (response.ok) {
         return {
           status: "up",
-          details: "AssemblyAI доступен. Проверка авторизации выполнена успешно.",
+          details: "AssemblyAI доступен. Проверка списка транскриптов выполнена успешно.",
           checkedAt,
         }
       }
