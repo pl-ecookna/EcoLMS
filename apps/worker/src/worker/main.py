@@ -1145,6 +1145,46 @@ def download_s3_object_bytes(config: WorkerConfig, storage_key: str) -> bytes:
     return bytes(content)
 
 
+def download_s3_object_to_file(
+    config: WorkerConfig,
+    storage_key: str,
+    destination_path: str,
+    *,
+    heartbeat_conn: psycopg.Connection,
+    job_id: str,
+    meeting_id: str,
+) -> int:
+    response = s3_client(config).get_object(Bucket=config.s3_bucket, Key=storage_key)
+    body = response.get("Body")
+    if body is None:
+        raise RuntimeError("S3 вернул пустой body для source file.")
+
+    bytes_written = 0
+    chunk_size = 8 * 1024 * 1024
+    last_heartbeat_at = time.monotonic()
+
+    with open(destination_path, "wb") as destination:
+        while True:
+            chunk = body.read(chunk_size)
+            if not chunk:
+                break
+            destination.write(chunk)
+            bytes_written += len(chunk)
+
+            if time.monotonic() - last_heartbeat_at >= 10.0:
+                touch_meeting_job_heartbeat(heartbeat_conn, job_id)
+                log_worker_event(
+                    "meeting-audio-download-heartbeat",
+                    jobId=job_id,
+                    meetingId=meeting_id,
+                    storageKey=storage_key,
+                    bytesSize=bytes_written,
+                )
+                last_heartbeat_at = time.monotonic()
+
+    return bytes_written
+
+
 def extract_document_text(source_file: dict[str, Any], file_bytes: bytes) -> str:
     mime_type = str(source_file.get("mime_type") or "").lower()
     ext = file_extension(source_file)
@@ -2341,17 +2381,23 @@ def prepare_meeting_audio(
         meetingId=source_file.get("meeting_id"),
         storageKey=source_file.get("storage_key"),
     )
-    source_bytes = download_s3_object_bytes(config, str(source_file["storage_key"]))
+    source_suffix = "." + file_extension(source_file) if file_extension(source_file) else ".bin"
+    with tempfile.NamedTemporaryFile(suffix=source_suffix, delete=False) as src:
+        source_path = src.name
+    source_bytes_size = download_s3_object_to_file(
+        config,
+        str(source_file["storage_key"]),
+        source_path,
+        heartbeat_conn=heartbeat_conn,
+        job_id=job_id,
+        meeting_id=str(source_file.get("meeting_id")),
+    )
     log_worker_event(
         "meeting-audio-download-done",
         meetingId=source_file.get("meeting_id"),
         storageKey=source_file.get("storage_key"),
-        bytesSize=len(source_bytes),
+        bytesSize=source_bytes_size,
     )
-    source_suffix = "." + file_extension(source_file) if file_extension(source_file) else ".bin"
-    with tempfile.NamedTemporaryFile(suffix=source_suffix, delete=False) as src:
-        src.write(source_bytes)
-        source_path = src.name
     with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as out:
         output_path = out.name
 
