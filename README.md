@@ -178,6 +178,7 @@ Browser
 - `ASSEMBLYAI_POLL_INTERVAL_SECONDS`
 - `ASSEMBLYAI_TIMEOUT_SECONDS`
 - `ASSEMBLYAI_AUDIO_URL_EXPIRES_SECONDS`
+- `MEETING_JOB_STALE_TIMEOUT_SECONDS`
 - `WHISPER_MODEL_SIZE`
 - `WHISPER_COMPUTE_TYPE`
 - `WORKER_JOB_QUEUE_KEY`
@@ -196,6 +197,11 @@ Browser
 - `SALUTESPEECH_SSL_NO_VERIFY`
 - `SALUTESPEECH_POLL_INTERVAL_SECONDS`
 - `SALUTESPEECH_TIMEOUT_SECONDS`
+
+`MEETING_JOB_STALE_TIMEOUT_SECONDS` защищает от зависших meeting-job:
+если очередь не взяла задачу или worker перестал обновлять heartbeat,
+API автоматически помечает job и встречу как `failed`, чтобы они не висели
+в `processing` бесконечно.
 
 Для обратной совместимости `api` и `worker` также понимают старые алиасы `SBER_*`
 и могут собрать OAuth Basic key из `SBER_CLIENT_ID` + `SBER_CLIENT_SECRET`, если

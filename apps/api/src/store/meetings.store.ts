@@ -60,6 +60,7 @@ export interface MeetingJobRecord {
   resultJson: Record<string, unknown> | null
   errorText: string | null
   startedAt: string | null
+  processingHeartbeatAt: string | null
   finishedAt: string | null
   createdAt: string
 }
@@ -193,6 +194,8 @@ function mapJobRow(row: Record<string, unknown>): MeetingJobRecord {
     resultJson: parseJson<Record<string, unknown> | null>(row.result_json, null),
     errorText: (row.error_text as string | null) ?? null,
     startedAt: (row.started_at as string | null) ?? null,
+    processingHeartbeatAt:
+      (row.processing_heartbeat_at as string | null) ?? null,
     finishedAt: (row.finished_at as string | null) ?? null,
     createdAt: String(row.created_at),
   }
@@ -347,6 +350,15 @@ function makeMeetingId() {
   return `meet-${randomUUID().slice(0, 8)}`
 }
 
+function meetingJobStaleTimeoutSeconds() {
+  const parsed = Number(process.env.MEETING_JOB_STALE_TIMEOUT_SECONDS ?? "3600")
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 3600
+}
+
+function staleJobTimeoutSql() {
+  return `${meetingJobStaleTimeoutSeconds()} seconds`
+}
+
 @Injectable()
 export class MeetingsStore {
   constructor(
@@ -431,8 +443,10 @@ export class MeetingsStore {
     const items: MeetingListRecord[] = []
     for (const row of meetingsResult.rows) {
       const meetingId = String(row.id)
+      await this.reconcileStaleMeetingJobs(meetingId)
+      const freshMeeting = await this.getMeetingSummary(meetingId)
       items.push({
-        ...mapMeetingRow(row),
+        ...freshMeeting,
         sourceFile: await this.getSourceFile(meetingId),
       })
     }
@@ -448,6 +462,7 @@ export class MeetingsStore {
   }
 
   async getMeeting(id: string) {
+    await this.reconcileStaleMeetingJobs(id)
     let meeting = await this.getMeetingSummary(id)
     const [sourceFile, speakers, jobs, artifacts] = await Promise.all([
       this.getSourceFile(id),
@@ -782,6 +797,7 @@ export class MeetingsStore {
   }
 
   async getMeetingStatus(id: string) {
+    await this.reconcileStaleMeetingJobs(id)
     const meeting = await this.getMeetingSummary(id)
     return {
       id: meeting.id,
@@ -793,6 +809,7 @@ export class MeetingsStore {
   }
 
   async getTranscript(meetingId: string) {
+    await this.reconcileStaleMeetingJobs(meetingId)
     const meeting = await this.getMeeting(meetingId)
     return {
       meetingId,
@@ -833,6 +850,7 @@ export class MeetingsStore {
   }
 
   async listArtifacts(meetingId: string) {
+    await this.reconcileStaleMeetingJobs(meetingId)
     await this.getMeetingSummary(meetingId)
     const result = await this.db.query<Record<string, unknown>>(
       `
@@ -893,6 +911,7 @@ export class MeetingsStore {
   }
 
   async listJobs(meetingId: string) {
+    await this.reconcileStaleMeetingJobs(meetingId)
     await this.getMeetingSummary(meetingId)
     const result = await this.db.query<Record<string, unknown>>(
       `
@@ -907,6 +926,7 @@ export class MeetingsStore {
   }
 
   async retryJob(meetingId: string, jobId: string) {
+    await this.reconcileStaleMeetingJobs(meetingId)
     const result = await this.db.query<Record<string, unknown>>(
       `
       select *
@@ -992,9 +1012,9 @@ export class MeetingsStore {
       const createdResult = await client.query<Record<string, unknown>>(
         `
         insert into meeting_jobs (
-          id, meeting_id, stage, status, payload_json, result_json, error_text, started_at, finished_at, created_at
+          id, meeting_id, stage, status, payload_json, result_json, error_text, started_at, processing_heartbeat_at, finished_at, created_at
         ) values (
-          $1, $2, $3, 'queued', $4::jsonb, null, null, null, null, now()
+          $1, $2, $3, 'queued', $4::jsonb, null, null, null, null, null, now()
         )
         returning *
         `,
@@ -1086,6 +1106,64 @@ export class MeetingsStore {
       throw new NotFoundException("Встреча не найдена")
     }
     return mapMeetingRow(row)
+  }
+
+  private async reconcileStaleMeetingJobs(meetingId: string) {
+    const staleJobsResult = await this.db.query<Record<string, unknown>>(
+      `
+      select id, stage, status
+      from meeting_jobs
+      where meeting_id = $1
+        and status in ('queued', 'processing')
+        and coalesce(processing_heartbeat_at, started_at, created_at) < now() - $2::interval
+      order by created_at asc
+      `,
+      [meetingId, staleJobTimeoutSql()]
+    )
+
+    if (staleJobsResult.rowCount === 0) {
+      return
+    }
+
+    const staleJobIds = staleJobsResult.rows.map((row) => String(row.id))
+    const staleJobStages = staleJobsResult.rows
+      .map((row) => String(row.stage))
+      .join(", ")
+    const staleErrorText = `Задача обработки зависла и была автоматически остановлена. Проверьте worker и запустите этап заново.`
+
+    await this.db.transaction(async (client) => {
+      await client.query(
+        `
+        update meeting_jobs
+        set
+          status = 'failed',
+          error_text = $2,
+          finished_at = now()
+        where id = any($1::text[])
+        `,
+        [staleJobIds, staleErrorText]
+      )
+      await client.query(
+        `
+        update meeting_source_files
+        set processing_status = 'failed'
+        where meeting_id = $1 and processing_status = 'processing'
+        `,
+        [meetingId]
+      )
+      await client.query(
+        `
+        update meetings
+        set
+          status = 'failed',
+          error_text = $2,
+          processing_finished_at = now(),
+          updated_at = now()
+        where id = $1 and status = 'processing'
+        `,
+        [meetingId, `${staleErrorText} Затронутые этапы: ${staleJobStages}.`]
+      )
+    })
   }
 
   private async getSourceFile(meetingId: string) {

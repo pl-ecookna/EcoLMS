@@ -400,6 +400,7 @@ CREATE TABLE IF NOT EXISTS meeting_jobs (
   result_json jsonb NULL,
   error_text text NULL,
   started_at timestamptz NULL,
+  processing_heartbeat_at timestamptz NULL,
   finished_at timestamptz NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
@@ -587,6 +588,12 @@ export class PostgresService implements OnModuleInit, OnModuleDestroy {
     }
 
     await this.pool.query(SCHEMA_SQL)
+    await this.pool.query(
+      `
+      alter table meeting_jobs
+      add column if not exists processing_heartbeat_at timestamptz null
+      `
+    )
     await this.seedPrompts()
     await this.seedIfEmpty()
     this.initialized = true

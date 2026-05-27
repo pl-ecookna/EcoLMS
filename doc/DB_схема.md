@@ -91,6 +91,7 @@
 - `result_json` `jsonb`, nullable
 - `error_text` `text`, nullable
 - `started_at` `timestamptz`, nullable
+- `processing_heartbeat_at` `timestamptz`, nullable
 - `finished_at` `timestamptz`, nullable
 - `created_at` `timestamptz`
 
@@ -107,6 +108,10 @@
 - `processing`
 - `done`
 - `failed`
+
+`processing_heartbeat_at` обновляется worker-ом во время длинных meeting stages.
+Если job слишком долго остаётся без heartbeat, API автоматически переводит её в
+`failed`, чтобы встреча не висела в `processing` бесконечно.
 
 ## Таблица `artifacts`
 

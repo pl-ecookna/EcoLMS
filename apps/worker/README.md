@@ -46,6 +46,7 @@
 Для `SaluteSpeech` рекомендуемый путь для Sber TLS: `SALUTESPEECH_CA_CERT_PATH=certs/russiantrustedca.pem`.
 Для dev-среды при проблемах с TLS-цепочкой можно временно включить `SALUTESPEECH_SSL_NO_VERIFY=true`.
 Для `AssemblyAI` по умолчанию используется `ASSEMBLYAI_BASE_URL=https://api.eu.assemblyai.com` и доступ к файлу через временный `S3 presigned URL`.
+Для защиты от зависших встреч используется `MEETING_JOB_STALE_TIMEOUT_SECONDS` на стороне API: если job слишком долго остаётся в `queued` или `processing`, она автоматически переводится в `failed`.
 Для LLM-вызовов (`OpenAI`/`OpenRouter`) worker использует trust store из `certifi`.
 Prompt templates для `lms` и `meetings` worker читает из таблицы `llm_prompts` в PostgreSQL.
 Если запись в таблице отсутствует, worker дозаписывает дефолтный prompt из кода и использует его как seed.

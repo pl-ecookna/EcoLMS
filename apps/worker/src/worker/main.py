@@ -2017,8 +2017,23 @@ def set_meeting_job_processing(conn: psycopg.Connection, job_id: str) -> None:
     conn.execute(
         """
         update meeting_jobs
-        set status = 'processing', started_at = now(), error_text = null
+        set
+          status = 'processing',
+          started_at = now(),
+          processing_heartbeat_at = now(),
+          error_text = null
         where id = %s
+        """,
+        (job_id,),
+    )
+
+
+def touch_meeting_job_heartbeat(conn: psycopg.Connection, job_id: str) -> None:
+    conn.execute(
+        """
+        update meeting_jobs
+        set processing_heartbeat_at = now()
+        where id = %s and status = 'processing'
         """,
         (job_id,),
     )
@@ -2032,6 +2047,7 @@ def set_meeting_job_done(
         update meeting_jobs
         set status = 'done',
             result_json = %s::jsonb,
+            processing_heartbeat_at = now(),
             finished_at = now()
         where id = %s
         """,
@@ -2051,6 +2067,7 @@ def set_meeting_job_failed(conn: psycopg.Connection, job_id: str, error_text: st
         update meeting_jobs
         set status = 'failed',
             error_text = %s,
+            processing_heartbeat_at = now(),
             finished_at = now()
         where id = %s
         """,
@@ -2458,6 +2475,8 @@ def transcribe_meeting_with_assemblyai(
     config: WorkerConfig,
     prepared_audio: dict[str, Any],
     source_file: dict[str, Any],
+    heartbeat_conn: psycopg.Connection,
+    job_id: str,
 ) -> dict[str, Any]:
     if not config.assemblyai_api_key:
         raise RuntimeError("ASSEMBLYAI_API_KEY не задан.")
@@ -2472,10 +2491,12 @@ def transcribe_meeting_with_assemblyai(
         config.assemblyai_audio_url_expires_seconds,
     )
     transcript_id = create_assemblyai_transcript(config, audio_url)
+    touch_meeting_job_heartbeat(heartbeat_conn, job_id)
 
     started_at = time.time()
     while True:
         payload = get_assemblyai_transcript(config, transcript_id)
+        touch_meeting_job_heartbeat(heartbeat_conn, job_id)
         status = str(payload.get("status") or "").strip().lower()
         if status == "completed":
             return {
@@ -2499,6 +2520,8 @@ def transcribe_meeting_with_assemblyai(
 def transcribe_meeting_with_salutespeech(
     config: WorkerConfig,
     prepared_audio: dict[str, Any],
+    heartbeat_conn: psycopg.Connection,
+    job_id: str,
 ) -> dict[str, Any]:
     token = get_salutespeech_access_token(config)
     request_file_id = salutespeech_upload_file(
@@ -2515,12 +2538,14 @@ def transcribe_meeting_with_salutespeech(
         sample_rate=int(prepared_audio["sample_rate"]),
         channels_count=int(prepared_audio["channels_count"]),
     )
+    touch_meeting_job_heartbeat(heartbeat_conn, job_id)
 
     started_at = time.time()
     last_status_payload: dict[str, Any] | None = None
     while True:
         status_payload = salutespeech_get_task_status(config, token, task_id)
         last_status_payload = status_payload
+        touch_meeting_job_heartbeat(heartbeat_conn, job_id)
         result = status_payload.get("result") or {}
         status = str(result.get("status") or "").upper()
         if status == "DONE":
@@ -2546,10 +2571,23 @@ def transcribe_meeting(
     config: WorkerConfig,
     prepared_audio: dict[str, Any],
     source_file: dict[str, Any],
+    heartbeat_conn: psycopg.Connection,
+    job_id: str,
 ) -> dict[str, Any]:
     if config.meeting_transcription_provider == "assemblyai":
-        return transcribe_meeting_with_assemblyai(config, prepared_audio, source_file)
-    return transcribe_meeting_with_salutespeech(config, prepared_audio)
+        return transcribe_meeting_with_assemblyai(
+            config,
+            prepared_audio,
+            source_file,
+            heartbeat_conn,
+            job_id,
+        )
+    return transcribe_meeting_with_salutespeech(
+        config,
+        prepared_audio,
+        heartbeat_conn,
+        job_id,
+    )
 
 
 def handle_meeting_audio_prepared(
@@ -2600,9 +2638,17 @@ def handle_meeting_transcript_compiled(
     config: WorkerConfig,
     meeting: dict[str, Any],
     source_file: dict[str, Any],
+    heartbeat_conn: psycopg.Connection,
+    job_id: str,
 ) -> dict[str, Any]:
     prepared = prepare_meeting_audio(config, source_file)
-    raw_result = transcribe_meeting(config, prepared, source_file)
+    raw_result = transcribe_meeting(
+        config,
+        prepared,
+        source_file,
+        heartbeat_conn,
+        job_id,
+    )
     if config.meeting_transcription_provider == "assemblyai":
         diarized_segments = parse_assemblyai_segments(raw_result["result_payload"])
     else:
@@ -2679,6 +2725,8 @@ def handle_meeting_generation_stage(
     config: WorkerConfig,
     meeting: dict[str, Any],
     stage: str,
+    heartbeat_conn: psycopg.Connection,
+    job_id: str,
 ) -> dict[str, Any]:
     transcript_json_artifact = load_meeting_artifact(conn, meeting["id"], "transcript_compiled", "json")
     if transcript_json_artifact is None:
@@ -2718,6 +2766,7 @@ def handle_meeting_generation_stage(
         )
 
     transcript_input = build_meeting_llm_transcript_input(normalized_segments)
+    touch_meeting_job_heartbeat(heartbeat_conn, job_id)
     llm_result = generate_meeting_markdown_with_llm(
         conn,
         config,
@@ -2725,6 +2774,7 @@ def handle_meeting_generation_stage(
         meeting_title=str(meeting["title"]),
         transcript_input=transcript_input,
     )
+    touch_meeting_job_heartbeat(heartbeat_conn, job_id)
     markdown = str(llm_result.get("markdown") or "").strip()
     if stage == "meeting_actions":
         content_json = meeting_actions_json_from_llm(llm_result, markdown)
@@ -2785,6 +2835,7 @@ def queue_next_meeting_job(
 
 def process_meeting_job(config: WorkerConfig, job_message: dict[str, Any]) -> None:
     conn = psycopg.connect(config.postgres_url, row_factory=dict_row, autocommit=True)
+    status_conn = psycopg.connect(config.postgres_url, row_factory=dict_row, autocommit=True)
     try:
         job = load_meeting_job(conn, job_message["jobId"])
         if job is None:
@@ -2823,8 +2874,8 @@ def process_meeting_job(config: WorkerConfig, job_message: dict[str, Any]) -> No
         metadata: dict[str, Any]
         next_job_payload: dict[str, Any] | None = None
 
+        set_meeting_job_processing(status_conn, job["id"])
         with conn.transaction():
-            set_meeting_job_processing(conn, job["id"])
             conn.execute(
                 """
                 update meeting_source_files
@@ -2850,11 +2901,24 @@ def process_meeting_job(config: WorkerConfig, job_message: dict[str, Any]) -> No
             if job["stage"] == "audio_prepared":
                 metadata = handle_meeting_audio_prepared(conn, config, meeting, source_file)
             elif job["stage"] == "transcript_compiled":
-                metadata = handle_meeting_transcript_compiled(conn, config, meeting, source_file)
+                metadata = handle_meeting_transcript_compiled(
+                    conn,
+                    config,
+                    meeting,
+                    source_file,
+                    status_conn,
+                    job["id"],
+                )
             else:
-                metadata = handle_meeting_generation_stage(conn, config, meeting, job["stage"])
+                metadata = handle_meeting_generation_stage(
+                    conn,
+                    config,
+                    meeting,
+                    job["stage"],
+                    status_conn,
+                    job["id"],
+                )
 
-            set_meeting_job_done(conn, job["id"], job["stage"], metadata)
             trigger = str((job.get("payload_json") or {}).get("trigger") or "")
             if trigger in {"start", "auto"}:
                 next_job_payload = queue_next_meeting_job(
@@ -2873,6 +2937,8 @@ def process_meeting_job(config: WorkerConfig, job_message: dict[str, Any]) -> No
                     """,
                     (meeting["id"],),
                 )
+
+        set_meeting_job_done(status_conn, job["id"], job["stage"], metadata)
 
         if next_job_payload is not None:
             redis_command(
@@ -2901,7 +2967,7 @@ def process_meeting_job(config: WorkerConfig, job_message: dict[str, Any]) -> No
         except Exception:
             pass
         try:
-            set_meeting_job_failed(conn, job_message["jobId"], str(exc))
+            set_meeting_job_failed(status_conn, job_message["jobId"], str(exc))
             conn.execute(
                 """
                 update meetings
@@ -2921,7 +2987,6 @@ def process_meeting_job(config: WorkerConfig, job_message: dict[str, Any]) -> No
                 """,
                 (job_message["meetingId"],),
             )
-            conn.commit()
         except Exception:
             pass
         print(
@@ -2936,6 +3001,10 @@ def process_meeting_job(config: WorkerConfig, job_message: dict[str, Any]) -> No
             )
         )
     finally:
+        try:
+            status_conn.close()
+        except Exception:
+            pass
         conn.close()
 
 
