@@ -45,7 +45,7 @@
 Для обработки встреч в окружении также должен быть доступен `ffmpeg`.
 Для `SaluteSpeech` рекомендуемый путь для Sber TLS: `SALUTESPEECH_CA_CERT_PATH=certs/russiantrustedca.pem`.
 Для dev-среды при проблемах с TLS-цепочкой можно временно включить `SALUTESPEECH_SSL_NO_VERIFY=true`.
-Для `AssemblyAI` по умолчанию используется `ASSEMBLYAI_BASE_URL=https://api.eu.assemblyai.com` и доступ к файлу через временный `S3 presigned URL`.
+Для `AssemblyAI` по умолчанию используется `ASSEMBLYAI_BASE_URL=https://api.eu.assemblyai.com` и доступ к файлу через временный `S3 presigned URL`. Для `meetings` worker передаёт в `AssemblyAI` исходный `source file` по URL и не скачивает гигантский видеофайл локально.
 Если подготовка аудио зависает на большом файле, увеличь `MEETING_AUDIO_PREP_TIMEOUT_SECONDS`.
 Для защиты от зависших встреч используется `MEETING_JOB_STALE_TIMEOUT_SECONDS` на стороне API: если job слишком долго остаётся в `queued` или `processing`, она автоматически переводится в `failed`.
 Для LLM-вызовов (`OpenAI`/`OpenRouter`) worker использует trust store из `certifi`.

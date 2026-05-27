@@ -2873,17 +2873,33 @@ def handle_meeting_transcript_compiled(
         jobId=job_id,
         meetingId=meeting["id"],
     )
-    prepared = prepare_meeting_audio(config, source_file, heartbeat_conn, job_id)
-    touch_meeting_job_heartbeat(heartbeat_conn, job_id)
-    log_worker_event(
-        "meeting-audio-prepare-done",
-        jobId=job_id,
-        meetingId=meeting["id"],
-        durationSeconds=prepared["duration_seconds"],
-        channelsCount=prepared["channels_count"],
-        sampleRate=prepared["sample_rate"],
-        audioStorageKey=prepared["audio_storage_key"],
-    )
+    if config.meeting_transcription_provider == "assemblyai":
+        prepared = {
+            "audio_storage_key": str(source_file["storage_key"]),
+            "audio_mime_type": str(source_file.get("mime_type") or "video/webm"),
+            "duration_seconds": int(source_file.get("duration_seconds") or 0) or None,
+            "sample_rate": None,
+            "channels_count": None,
+        }
+        log_worker_event(
+            "meeting-audio-prepare-skipped",
+            jobId=job_id,
+            meetingId=meeting["id"],
+            reason="assemblyai-uses-source-url",
+            sourceStorageKey=source_file.get("storage_key"),
+        )
+    else:
+        prepared = prepare_meeting_audio(config, source_file, heartbeat_conn, job_id)
+        touch_meeting_job_heartbeat(heartbeat_conn, job_id)
+        log_worker_event(
+            "meeting-audio-prepare-done",
+            jobId=job_id,
+            meetingId=meeting["id"],
+            durationSeconds=prepared["duration_seconds"],
+            channelsCount=prepared["channels_count"],
+            sampleRate=prepared["sample_rate"],
+            audioStorageKey=prepared["audio_storage_key"],
+        )
     log_worker_event(
         "meeting-transcript-provider-start",
         jobId=job_id,
