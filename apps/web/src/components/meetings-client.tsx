@@ -1377,9 +1377,6 @@ export function MeetingsWorkspaceView({
                   <WandSparklesIcon data-icon="inline-start" />
                   Встречи
                 </Badge>
-                {systemHealth?.speechProviderName ? (
-                  <Badge variant="outline">{systemHealth.speechProviderName}</Badge>
-                ) : null}
               </div>
               <div className="space-y-2">
                 <h1 className="font-heading text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
@@ -2150,7 +2147,7 @@ export function MeetingDetailView({
                   !hasMarkdownArtifacts && isMeetingProcessing ? (
                     <MarkdownLoadingState />
                   ) : (
-                    <ScrollArea className="h-[560px] rounded-2xl border border-border/70 bg-background/80 p-4 shadow-sm">
+                    <ScrollArea className="h-[560px] rounded-2xl border border-border/70 bg-background/80 px-6 py-5 shadow-sm">
                       <div className="max-w-none">
                         <ReactMarkdown
                           remarkPlugins={[remarkGfm]}
