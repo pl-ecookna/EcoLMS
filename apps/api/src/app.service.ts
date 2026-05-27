@@ -509,10 +509,10 @@ export class AppService {
         `
         select max(last_activity)::text as last_activity
         from (
-          select max(coalesce(processing_heartbeat_at, finished_at, started_at, created_at)) as last_activity
+          select max(coalesce(finished_at, started_at, created_at)) as last_activity
           from processing_jobs
           union all
-          select max(coalesce(processing_heartbeat_at, finished_at, started_at, created_at)) as last_activity
+          select max(coalesce(finished_at, started_at, created_at)) as last_activity
           from meeting_jobs
         ) activity
         `
