@@ -58,6 +58,7 @@ class WorkerConfig:
     assemblyai_poll_interval_seconds: float = 5.0
     assemblyai_timeout_seconds: float = 1800.0
     assemblyai_audio_url_expires_seconds: int = 1800
+    meeting_audio_prep_timeout_seconds: float = 900.0
     salutespeech_auth_key: str = ""
     salutespeech_oauth_url: str = ""
     salutespeech_rest_url: str = "https://smartspeech.sber.ru/rest/v1"
@@ -228,6 +229,9 @@ def load_config() -> WorkerConfig:
         assemblyai_timeout_seconds=float(os.getenv("ASSEMBLYAI_TIMEOUT_SECONDS", "1800")),
         assemblyai_audio_url_expires_seconds=int(
             os.getenv("ASSEMBLYAI_AUDIO_URL_EXPIRES_SECONDS", "1800")
+        ),
+        meeting_audio_prep_timeout_seconds=float(
+            os.getenv("MEETING_AUDIO_PREP_TIMEOUT_SECONDS", "900")
         ),
         salutespeech_auth_key=salutespeech_auth_key,
         salutespeech_oauth_url=first_defined_env(
@@ -1117,6 +1121,14 @@ def s3_presigned_get_url(config: WorkerConfig, storage_key: str, expires_in_seco
         Params={"Bucket": config.s3_bucket, "Key": storage_key},
         ExpiresIn=max(60, expires_in_seconds),
     )
+
+
+def log_worker_event(event: str, **fields: Any) -> None:
+    payload: dict[str, Any] = {"service": "worker", "event": event}
+    for key, value in fields.items():
+        if value is not None:
+            payload[key] = value
+    print(json.dumps(payload, ensure_ascii=False))
 
 
 def download_s3_object_bytes(config: WorkerConfig, storage_key: str) -> bytes:
@@ -2230,24 +2242,28 @@ def upsert_meeting_transcript(
 
 
 def ffprobe_audio_details(source_path: str) -> tuple[int, int, float]:
-    result = subprocess.run(
-        [
-            "ffprobe",
-            "-v",
-            "error",
-            "-select_streams",
-            "a:0",
-            "-show_entries",
-            "stream=channels",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "json",
-            source_path,
-        ],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "stream=channels",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "json",
+                source_path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60.0,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("ffprobe timed out while preparing meeting audio.") from exc
     if result.returncode != 0:
         raise RuntimeError(
             f"ffprobe failed: {(result.stderr or result.stdout or '').strip()}"
@@ -2276,7 +2292,18 @@ def upload_s3_object_bytes(
 def prepare_meeting_audio(
     config: WorkerConfig, source_file: dict[str, Any]
 ) -> dict[str, Any]:
+    log_worker_event(
+        "meeting-audio-download-start",
+        meetingId=source_file.get("meeting_id"),
+        storageKey=source_file.get("storage_key"),
+    )
     source_bytes = download_s3_object_bytes(config, str(source_file["storage_key"]))
+    log_worker_event(
+        "meeting-audio-download-done",
+        meetingId=source_file.get("meeting_id"),
+        storageKey=source_file.get("storage_key"),
+        bytesSize=len(source_bytes),
+    )
     source_suffix = "." + file_extension(source_file) if file_extension(source_file) else ".bin"
     with tempfile.NamedTemporaryFile(suffix=source_suffix, delete=False) as src:
         src.write(source_bytes)
@@ -2285,7 +2312,19 @@ def prepare_meeting_audio(
         output_path = out.name
 
     try:
+        log_worker_event(
+            "meeting-audio-ffprobe-start",
+            meetingId=source_file.get("meeting_id"),
+            storageKey=source_file.get("storage_key"),
+        )
         _, target_channels, duration = ffprobe_audio_details(source_path)
+        log_worker_event(
+            "meeting-audio-ffprobe-done",
+            meetingId=source_file.get("meeting_id"),
+            storageKey=source_file.get("storage_key"),
+            durationSeconds=duration,
+            targetChannels=target_channels,
+        )
         command = [
             "ffmpeg",
             "-hide_banner",
@@ -2307,10 +2346,31 @@ def prepare_meeting_audio(
             "ogg",
             output_path,
         ]
-        result = subprocess.run(command, capture_output=True, text=True)
+        log_worker_event(
+            "meeting-audio-ffmpeg-start",
+            meetingId=source_file.get("meeting_id"),
+            storageKey=source_file.get("storage_key"),
+            timeoutSeconds=config.meeting_audio_prep_timeout_seconds,
+        )
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=config.meeting_audio_prep_timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                "FFmpeg audio preparation timed out."
+            ) from exc
         if result.returncode != 0:
             details = (result.stderr or result.stdout or "").strip()
             raise RuntimeError(f"FFmpeg audio preparation failed: {details or 'unknown error'}")
+        log_worker_event(
+            "meeting-audio-ffmpeg-done",
+            meetingId=source_file.get("meeting_id"),
+            storageKey=source_file.get("storage_key"),
+        )
         with open(output_path, "rb") as file:
             audio_bytes = file.read()
         audio_storage_key: str | None = f"meetings/{source_file['meeting_id']}/derived/prepared-audio.ogg"
@@ -2338,6 +2398,13 @@ def prepare_meeting_audio(
                 )
             )
             audio_storage_key = None
+        log_worker_event(
+            "meeting-audio-ready",
+            meetingId=source_file.get("meeting_id"),
+            storageKey=audio_storage_key,
+            durationSeconds=int(round(duration)) if duration > 0 else None,
+            channelsCount=target_channels,
+        )
         return {
             "audio_storage_key": audio_storage_key,
             "audio_mime_type": "audio/ogg",
@@ -2500,14 +2567,39 @@ def transcribe_meeting_with_assemblyai(
         storage_key,
         config.assemblyai_audio_url_expires_seconds,
     )
+    log_worker_event(
+        "assemblyai-transcript-create-start",
+        jobId=job_id,
+        meetingId=source_file.get("meeting_id"),
+        storageKey=storage_key,
+    )
     transcript_id = create_assemblyai_transcript(config, audio_url)
     touch_meeting_job_heartbeat(heartbeat_conn, job_id)
+    log_worker_event(
+        "assemblyai-transcript-created",
+        jobId=job_id,
+        meetingId=source_file.get("meeting_id"),
+        transcriptId=transcript_id,
+    )
 
     started_at = time.time()
+    poll_count = 0
+    last_status = ""
     while True:
         payload = get_assemblyai_transcript(config, transcript_id)
         touch_meeting_job_heartbeat(heartbeat_conn, job_id)
+        poll_count += 1
         status = str(payload.get("status") or "").strip().lower()
+        if status != last_status or poll_count == 1 or poll_count % 12 == 0:
+            log_worker_event(
+                "assemblyai-transcript-status",
+                jobId=job_id,
+                meetingId=source_file.get("meeting_id"),
+                transcriptId=transcript_id,
+                status=status,
+                pollCount=poll_count,
+            )
+            last_status = status
         if status == "completed":
             return {
                 "transcript_id": transcript_id,
@@ -2515,6 +2607,13 @@ def transcribe_meeting_with_assemblyai(
                 "result_payload": payload,
             }
         if status in {"error", "failed"}:
+            log_worker_event(
+                "assemblyai-transcript-failed",
+                jobId=job_id,
+                meetingId=source_file.get("meeting_id"),
+                transcriptId=transcript_id,
+                status=status,
+            )
             raise RuntimeError(
                 str(
                     payload.get("error")
@@ -2651,13 +2750,49 @@ def handle_meeting_transcript_compiled(
     heartbeat_conn: psycopg.Connection,
     job_id: str,
 ) -> dict[str, Any]:
+    log_worker_event(
+        "meeting-transcript-compile-start",
+        jobId=job_id,
+        meetingId=meeting["id"],
+        sourceStorageKey=source_file.get("storage_key"),
+        provider=config.meeting_transcription_provider,
+    )
+    touch_meeting_job_heartbeat(heartbeat_conn, job_id)
+    log_worker_event(
+        "meeting-audio-prepare-start",
+        jobId=job_id,
+        meetingId=meeting["id"],
+    )
     prepared = prepare_meeting_audio(config, source_file)
+    touch_meeting_job_heartbeat(heartbeat_conn, job_id)
+    log_worker_event(
+        "meeting-audio-prepare-done",
+        jobId=job_id,
+        meetingId=meeting["id"],
+        durationSeconds=prepared["duration_seconds"],
+        channelsCount=prepared["channels_count"],
+        sampleRate=prepared["sample_rate"],
+        audioStorageKey=prepared["audio_storage_key"],
+    )
+    log_worker_event(
+        "meeting-transcript-provider-start",
+        jobId=job_id,
+        meetingId=meeting["id"],
+        provider=config.meeting_transcription_provider,
+    )
     raw_result = transcribe_meeting(
         config,
         prepared,
         source_file,
         heartbeat_conn,
         job_id,
+    )
+    log_worker_event(
+        "meeting-transcript-provider-done",
+        jobId=job_id,
+        meetingId=meeting["id"],
+        provider=config.meeting_transcription_provider,
+        resultKeys=sorted(raw_result.keys()),
     )
     if config.meeting_transcription_provider == "assemblyai":
         diarized_segments = parse_assemblyai_segments(raw_result["result_payload"])
