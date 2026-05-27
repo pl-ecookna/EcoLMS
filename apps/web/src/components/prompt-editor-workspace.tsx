@@ -157,30 +157,41 @@ export function PromptEditorWorkspace({
   }, [preferredModule])
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(59,130,246,0.10),_transparent_32%),radial-gradient(circle_at_top_right,_rgba(16,185,129,0.10),_transparent_28%),linear-gradient(to_bottom,_var(--background),_var(--background))]">
-      <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-3 px-4 py-3 sm:px-6 lg:px-8">
-        <header className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" nativeButton={false} render={<Link href={backHref} />}>
-              <ArrowLeftIcon data-icon="inline-start" />
-              {backLabel}
-            </Button>
-            <div className="flex items-center gap-2">
-              <Badge variant="secondary">
-                <WandSparklesIcon data-icon="inline-start" />
-                Промпты
-              </Badge>
+    <div className="min-h-screen bg-transparent">
+      <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-4 px-4 py-4 sm:px-6 lg:px-8">
+        <header className="rounded-3xl border border-border/70 bg-card/95 px-5 py-4 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button variant="ghost" size="sm" nativeButton={false} render={<Link href={backHref} />}>
+                  <ArrowLeftIcon data-icon="inline-start" />
+                  {backLabel}
+                </Button>
+                <Badge variant="secondary">
+                  <WandSparklesIcon data-icon="inline-start" />
+                  Промпты
+                </Badge>
+              </div>
+              <div className="space-y-2">
+                <h1 className="font-heading text-3xl font-semibold tracking-tight text-foreground">
+                  Редактор промптов
+                </h1>
+                <p className="max-w-2xl text-sm leading-7 text-muted-foreground">
+                  Единое место для настройки системных подсказок LMS и встреч. Формат ответов
+                  остаётся управляемым, а редактирование - быстрым и спокойным.
+                </p>
+              </div>
             </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Badge variant="outline">LMS</Badge>
-            <Badge variant="outline">Meetings</Badge>
+            <div className="flex items-center gap-2">
+              <Badge variant="outline">LMS</Badge>
+              <Badge variant="outline">Meetings</Badge>
+            </div>
           </div>
         </header>
 
         <section className="grid flex-1 gap-3 xl:grid-cols-[360px_minmax(0,1fr)]">
-          <Card className="flex min-h-[760px] flex-col overflow-hidden border-border/80 bg-card">
-            <CardHeader className="border-b bg-secondary/35 px-4 py-3">
+          <Card className="flex min-h-[760px] flex-col overflow-hidden border-border/70 bg-card/95 shadow-sm">
+            <CardHeader className="border-b border-border/70 bg-muted/35 px-4 py-3">
               <CardTitle>Список промптов</CardTitle>
             </CardHeader>
             <CardContent className="min-h-0 flex-1 p-0">
@@ -231,8 +242,8 @@ export function PromptEditorWorkspace({
             </CardContent>
           </Card>
 
-          <Card className="flex min-h-[760px] flex-col overflow-hidden border-border/80 bg-card">
-            <CardHeader className="border-b bg-secondary/20 px-4 py-3">
+          <Card className="flex min-h-[760px] flex-col overflow-hidden border-border/70 bg-card/95 shadow-sm">
+            <CardHeader className="border-b border-border/70 bg-muted/20 px-4 py-3">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="space-y-1">
                   <CardTitle>Редактор промпта</CardTitle>
