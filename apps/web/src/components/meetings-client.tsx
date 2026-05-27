@@ -1059,6 +1059,7 @@ export function MeetingsWorkspaceView({
   const [createProgress, setCreateProgress] = useState(0)
   const [isCreating, setIsCreating] = useState(false)
   const [meetingsPageState, setMeetingsPageState] = useState(pageData)
+  const [activeMeetingId, setActiveMeetingId] = useState(selectedMeetingId)
   const [selectedMeetingState, setSelectedMeetingState] = useState(selectedMeeting)
 
   useEffect(() => {
@@ -1068,6 +1069,10 @@ export function MeetingsWorkspaceView({
   useEffect(() => {
     setSelectedMeetingState(selectedMeeting)
   }, [selectedMeeting])
+
+  useEffect(() => {
+    setActiveMeetingId(selectedMeetingId)
+  }, [selectedMeetingId])
 
   function dismissAlert(id: string) {
     setAlerts((current) => current.filter((item) => item.id !== id))
@@ -1130,8 +1135,8 @@ export function MeetingsWorkspaceView({
         }
         setMeetingsPageState(nextPage)
 
-        if (selectedMeetingId) {
-          const nextMeeting = await getMeeting(selectedMeetingId)
+        if (activeMeetingId) {
+          const nextMeeting = await getMeeting(activeMeetingId)
           if (!cancelled) {
             setSelectedMeetingState(nextMeeting)
           }
@@ -1178,9 +1183,9 @@ export function MeetingsWorkspaceView({
     }
   }, [
     currentPage,
+    activeMeetingId,
     meetingsPageState.items,
     pageData.limit,
-    selectedMeetingId,
     selectedMeetingState,
   ])
 
@@ -1383,9 +1388,7 @@ export function MeetingsWorkspaceView({
                   Встречи
                 </h1>
                 <p className="max-w-2xl text-sm leading-7 text-muted-foreground sm:text-base">
-                  Единое рабочее пространство для загрузки записей, диаризации, сводок, протоколов
-                  и поручений. Интерфейс собран так, чтобы держать фокус на содержимом, а не на
-                  служебных деталях.
+                  Единое рабочее пространство для формирования, протоколов и поручений.
                 </p>
               </div>
             </div>
@@ -1461,7 +1464,6 @@ export function MeetingsWorkspaceView({
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <CardTitle>Список встреч</CardTitle>
-                  <CardDescription>Спокойная лента записей и их текущий статус.</CardDescription>
                 </div>
                 <div className="flex items-center gap-2">
                   <Badge variant="outline">{meetingsPageState.total}</Badge>
@@ -1477,7 +1479,7 @@ export function MeetingsWorkspaceView({
                 {meetingsPageState.items.length > 0 ? (
                   <div className="flex flex-col gap-2 p-2">
                     {meetingsPageState.items.map((meeting) => {
-                      const isSelected = meeting.id === selectedMeetingId
+                      const isSelected = meeting.id === activeMeetingId
                       const meetingHref = `/meetings?page=${currentPage}&meeting=${meeting.id}`
                       return (
                         <div
@@ -1491,11 +1493,31 @@ export function MeetingsWorkspaceView({
                               ? "border-primary/30 bg-muted/40 shadow-sm"
                               : "border-border/70 bg-card/95"
                           )}
-                          onClick={() => router.push(meetingHref)}
+                          onClick={() => {
+                            setActiveMeetingId(meeting.id)
+                            router.push(meetingHref)
+                            void (async () => {
+                              try {
+                                const nextMeeting = await getMeeting(meeting.id)
+                                setSelectedMeetingState(nextMeeting)
+                              } catch {
+                                // the URL change will re-sync the detail pane on the next render
+                              }
+                            })()
+                          }}
                           onKeyDown={(event) => {
                             if (event.key === "Enter" || event.key === " ") {
                               event.preventDefault()
+                              setActiveMeetingId(meeting.id)
                               router.push(meetingHref)
+                              void (async () => {
+                                try {
+                                  const nextMeeting = await getMeeting(meeting.id)
+                                  setSelectedMeetingState(nextMeeting)
+                                } catch {
+                                  // ignore; server props will catch up
+                                }
+                              })()
                             }
                           }}
                         >
