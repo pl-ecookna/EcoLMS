@@ -1269,12 +1269,6 @@ export function MeetingsWorkspaceView({
       { name: "Postgres", state: health.services.postgres },
       { name: "Redis", state: health.services.redis },
       { name: "Worker", state: health.services.worker, allowUnknown: true },
-      { name: "LLM", state: health.services.llm, allowUnknown: true },
-      {
-        name: health.speechProviderName ?? "STT-провайдер",
-        state: health.services.speechProvider,
-        allowUnknown: true,
-      },
     ]
 
     for (const service of requiredServices) {
