@@ -3198,7 +3198,10 @@ def process_meeting_job(config: WorkerConfig, job_message: dict[str, Any]) -> No
                 )
 
             trigger = str((job.get("payload_json") or {}).get("trigger") or "")
-            if trigger in {"start", "auto"}:
+            # Retry jobs should continue the meeting pipeline as well.
+            # Otherwise a retried transcript stage leaves downstream summary/protocol/actions
+            # at their empty seed artifacts and the meeting is marked completed too early.
+            if trigger in {"start", "auto", "retry"}:
                 next_job_payload = queue_next_meeting_job(
                     conn, config, meeting["id"], job["stage"]
                 )

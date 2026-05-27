@@ -55,6 +55,10 @@ Prompt templates для `lms` и `meetings` worker читает из табли�
 `decisions`, `actionItems` и `openQuestions`, если LLM вернул валидный JSON, но оставил
 поле `markdown` пустым.
 
+Повторный запуск meeting job со стадией `retry` продолжает пайплайн дальше по цепочке
+`transcript_compiled -> meeting_summary -> meeting_protocol -> meeting_actions`, чтобы
+после пересборки транскрипта downstream-артефакты не оставались на seed-заготовках.
+
 Текущий формат подготовки аудио остаётся совместимым с `SaluteSpeech` и `AssemblyAI`:
 
 - `OPUS`, `48kHz`, `mono`;
