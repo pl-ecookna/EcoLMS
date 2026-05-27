@@ -1160,7 +1160,7 @@ def download_s3_object_to_file(
         raise RuntimeError("S3 вернул пустой body для source file.")
 
     bytes_written = 0
-    chunk_size = 8 * 1024 * 1024
+    chunk_size = 256 * 1024
     last_heartbeat_at = time.monotonic()
 
     with open(destination_path, "wb") as destination:
