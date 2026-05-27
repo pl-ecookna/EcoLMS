@@ -1785,6 +1785,16 @@ def build_meeting_transcript_json(
     speakers: list[dict[str, Any]],
     segments: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    def normalize_confidence(value: Any) -> float | None:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
     return {
         "meetingId": meeting_id,
         "speakers": [
@@ -1806,7 +1816,7 @@ def build_meeting_transcript_json(
                 "startMs": int(item["start_ms"]),
                 "endMs": int(item["end_ms"]),
                 "text": str(item["text"]),
-                "confidence": item["confidence"],
+                "confidence": normalize_confidence(item["confidence"]),
             }
             for item in segments
         ],
