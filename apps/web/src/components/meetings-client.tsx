@@ -1334,9 +1334,13 @@ export function MeetingsWorkspaceView({
         const part = file.slice(start, end)
         const signed = await signMeetingUploadPart(init.uploadId, partNumber)
         setCreateMessage(`Загружается ${file.name}: часть ${partNumber}/${totalParts}`)
-        const response = await fetch(signed.signedUrl, {
+        const response = await fetch("/api/s3-upload", {
           method: signed.method || "PUT",
-          headers: signed.headers,
+          headers: {
+            ...signed.headers,
+            "x-target-url": signed.signedUrl,
+            "content-type": file.type || "application/octet-stream",
+          },
           body: part,
         })
 

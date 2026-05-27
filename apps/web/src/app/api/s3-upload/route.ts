@@ -16,11 +16,17 @@ async function proxy(request: NextRequest) {
     )
   }
 
-  const body = Buffer.from(await request.arrayBuffer())
+  const contentType = request.headers.get("content-type") ?? "application/octet-stream"
+  const contentLength = request.headers.get("content-length")
   const response = await fetch(targetUrl, {
     method: "PUT",
-    body,
+    body: request.body,
     cache: "no-store",
+    headers: {
+      "content-type": contentType,
+      ...(contentLength ? { "content-length": contentLength } : {}),
+    },
+    duplex: "half",
   } as RequestInit & { duplex?: "half" })
 
   const responseHeaders = new Headers(response.headers)
