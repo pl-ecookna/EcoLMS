@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { type DragEvent, useEffect, useMemo, useRef, useState } from "react"
+import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   ActivityIcon,
   AlertCircleIcon,
@@ -1059,19 +1059,28 @@ export function MeetingsWorkspaceView({
   const [createProgress, setCreateProgress] = useState(0)
   const [isCreating, setIsCreating] = useState(false)
   const [meetingsPageState, setMeetingsPageState] = useState(pageData)
-  const [activeMeetingId, setActiveMeetingId] = useState(selectedMeetingId)
+  const [activeMeetingId, setActiveMeetingId] = useState<string | null>(
+    selectedMeetingId ?? pageData.items[0]?.id ?? null
+  )
   const [selectedMeetingState, setSelectedMeetingState] = useState(selectedMeeting)
+  const [hasInitializedDefaultSelection, setHasInitializedDefaultSelection] = useState(
+    Boolean(selectedMeetingId)
+  )
 
   useEffect(() => {
     setMeetingsPageState(pageData)
   }, [pageData])
 
   useEffect(() => {
-    setSelectedMeetingState(selectedMeeting)
+    if (selectedMeeting) {
+      setSelectedMeetingState(selectedMeeting)
+    }
   }, [selectedMeeting])
 
   useEffect(() => {
-    setActiveMeetingId(selectedMeetingId)
+    if (selectedMeetingId) {
+      setActiveMeetingId(selectedMeetingId)
+    }
   }, [selectedMeetingId])
 
   function dismissAlert(id: string) {
@@ -1312,6 +1321,36 @@ export function MeetingsWorkspaceView({
     }
   }
 
+  const handleSelectMeeting = useCallback(
+    async (meetingId: string) => {
+      const meetingHref = `/meetings?page=${currentPage}&meeting=${meetingId}`
+      setActiveMeetingId(meetingId)
+      router.push(meetingHref)
+
+      try {
+        const nextMeeting = await getMeeting(meetingId)
+        setSelectedMeetingState(nextMeeting)
+      } catch {
+        // keep optimistic active state; server props will catch up on next render
+      }
+    },
+    [currentPage, router]
+  )
+
+  useEffect(() => {
+    if (hasInitializedDefaultSelection) {
+      return
+    }
+
+    const firstMeetingId = meetingsPageState.items[0]?.id ?? null
+    if (!firstMeetingId) {
+      return
+    }
+
+    setHasInitializedDefaultSelection(true)
+    void handleSelectMeeting(firstMeetingId)
+  }, [hasInitializedDefaultSelection, handleSelectMeeting, meetingsPageState.items])
+
   async function handleCreateMeeting() {
     const trimmedTitle = meetingTitle.trim()
     if (!trimmedTitle) {
@@ -1494,37 +1533,23 @@ export function MeetingsWorkspaceView({
                               : "border-border/70 bg-card/95"
                           )}
                           onClick={() => {
-                            setActiveMeetingId(meeting.id)
-                            router.push(meetingHref)
-                            void (async () => {
-                              try {
-                                const nextMeeting = await getMeeting(meeting.id)
-                                setSelectedMeetingState(nextMeeting)
-                              } catch {
-                                // the URL change will re-sync the detail pane on the next render
-                              }
-                            })()
+                            void handleSelectMeeting(meeting.id)
                           }}
                           onKeyDown={(event) => {
                             if (event.key === "Enter" || event.key === " ") {
                               event.preventDefault()
-                              setActiveMeetingId(meeting.id)
-                              router.push(meetingHref)
-                              void (async () => {
-                                try {
-                                  const nextMeeting = await getMeeting(meeting.id)
-                                  setSelectedMeetingState(nextMeeting)
-                                } catch {
-                                  // ignore; server props will catch up
-                                }
-                              })()
+                              void handleSelectMeeting(meeting.id)
                             }
                           }}
                         >
                           <div className="flex items-start justify-between gap-3">
                             <Link
                               href={meetingHref}
-                              onClick={(event) => event.stopPropagation()}
+                              onClick={(event) => {
+                                event.preventDefault()
+                                event.stopPropagation()
+                                void handleSelectMeeting(meeting.id)
+                              }}
                               className="min-w-0 flex-1 space-y-1 text-left"
                             >
                               <div className="truncate text-sm font-semibold">{meeting.title}</div>

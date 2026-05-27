@@ -19,7 +19,7 @@ export default async function MeetingsPage({
   const pageData = await requestServerJson<PaginatedMeetings>(
     `/api/meetings?page=${initialPage}&limit=${MEETINGS_PAGE_SIZE}`
   )
-  const selectedMeetingIdResolved = selectedMeetingId ?? pageData.items[0]?.id ?? null
+  const selectedMeetingIdResolved = selectedMeetingId
   const selectedMeeting = selectedMeetingIdResolved
     ? await requestServerJson<MeetingDetailRecord>(`/api/meetings/${selectedMeetingIdResolved}`)
     : null
