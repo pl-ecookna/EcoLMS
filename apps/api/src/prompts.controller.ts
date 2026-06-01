@@ -4,6 +4,7 @@ import { Roles } from "./auth/roles.decorator"
 import { EcolmsStore, type PromptModule } from "./store/ecolms.store"
 
 @Controller("prompts")
+@Roles("admin")
 export class PromptsController {
   constructor(private readonly store: EcolmsStore) {}
 
