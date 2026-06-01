@@ -1,5 +1,7 @@
 import type { NextRequest } from "next/server"
 
+import { buildInternalAuthHeaders, getSessionUser } from "@/lib/auth/logto"
+
 const INTERNAL_API_URLS = [
   "http://app-calculate-open-source-alarm-cob2f6:3001",
   "http://api:3001",
@@ -45,12 +47,35 @@ async function proxy(
   request: NextRequest,
   context: { params: Promise<{ path?: string[] }> }
 ) {
+  const user = getSessionUser(request.headers)
+  if (!user) {
+    return new Response(
+      JSON.stringify({
+        success: false,
+        data: null,
+        error: "Требуется вход в EcoLMS",
+      }),
+      {
+        status: 401,
+        headers: {
+          "content-type": "application/json",
+        },
+      }
+    )
+  }
+
   const params = await context.params
   const path = params.path?.join("/") ?? ""
   const url = new URL(request.url)
   const headers = new Headers(request.headers)
   headers.delete("host")
   headers.delete("content-length")
+  headers.delete("cookie")
+
+  const authHeaders = buildInternalAuthHeaders(user)
+  for (const [key, value] of Object.entries(authHeaders)) {
+    headers.set(key, value)
+  }
 
   const requestBody =
     request.method === "GET" || request.method === "HEAD"

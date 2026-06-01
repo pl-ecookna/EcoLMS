@@ -80,6 +80,7 @@ import {
 } from "@/components/ui/hover-card"
 import {
   meetingStageLabels,
+  type AuthUser,
   type MeetingArtifactRecord,
   type MeetingDetailRecord,
   type MeetingJobRecord,
@@ -267,10 +268,6 @@ function formatActionItem(item: ActionItem) {
 
 function isMeetingActiveStatus(status: MeetingStatus) {
   return status === "uploaded" || status === "processing"
-}
-
-function isActiveJobStatus(status: MeetingJobRecord["status"]) {
-  return status === "queued" || status === "processing"
 }
 
 function toTime(value: string | null | undefined) {
@@ -1060,18 +1057,21 @@ function serviceKindIcon(serviceKey: string) {
 }
 
 export function MeetingsWorkspaceView({
+  currentUser,
   currentPage,
   pageData,
   selectedMeetingId,
   selectedMeeting,
   showInfoSheet,
 }: {
+  currentUser: AuthUser
   currentPage: number
   pageData: PaginatedMeetings
   selectedMeetingId: string | null
   selectedMeeting: MeetingDetailRecord | null
   showInfoSheet: boolean
 }) {
+  const canManage = currentUser.role === "admin"
   const router = useRouter()
   const meetingFileInputRef = useRef<HTMLInputElement | null>(null)
   const [alerts, setAlerts] = useState<UiAlert[]>([])
@@ -1178,15 +1178,6 @@ export function MeetingsWorkspaceView({
           return
         }
         setMeetingsPageState(nextPage)
-
-        if (activeMeetingId) {
-          const nextMeeting = await getMeeting(activeMeetingId)
-          if (!cancelled) {
-            setSelectedMeetingState(nextMeeting)
-          }
-        } else if (!cancelled) {
-          setSelectedMeetingState(null)
-        }
       } catch {
         // keep current state; next tick will retry quietly
       }
@@ -1195,12 +1186,7 @@ export function MeetingsWorkspaceView({
     const hasActiveListMeeting = meetingsPageState.items.some((meeting) =>
       isMeetingActiveStatus(meeting.status)
     )
-    const hasActiveSelectedMeeting =
-      selectedMeetingState?.status === "uploaded" ||
-      selectedMeetingState?.status === "processing" ||
-      selectedMeetingState?.jobs.some((job) => isActiveJobStatus(job.status)) === true
-
-    if (!hasActiveListMeeting && !hasActiveSelectedMeeting) {
+    if (!hasActiveListMeeting) {
       return
     }
 
@@ -1227,10 +1213,8 @@ export function MeetingsWorkspaceView({
     }
   }, [
     currentPage,
-    activeMeetingId,
     meetingsPageState.items,
     pageData.limit,
-    selectedMeetingState,
   ])
 
   const overallHealthStatus: ServiceHealthStatus = systemHealth?.status ?? "unknown"
@@ -1469,15 +1453,17 @@ export function MeetingsWorkspaceView({
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                nativeButton={false}
-                render={<Link href="/prompts?module=meetings&from=meetings" />}
-              >
-                <SquarePenIcon data-icon="inline-start" />
-                Промпты
-              </Button>
+              {canManage ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  nativeButton={false}
+                  render={<Link href="/prompts?module=meetings&from=meetings" />}
+                >
+                  <SquarePenIcon data-icon="inline-start" />
+                  Промпты
+                </Button>
+              ) : null}
               <HoverCard>
                 <HoverCardTrigger
                   render={
@@ -1530,6 +1516,13 @@ export function MeetingsWorkspaceView({
                   </div>
                 </HoverCardContent>
               </HoverCard>
+              <div className="hidden items-center gap-2 rounded-xl border border-border/70 bg-card/95 px-3 py-2 text-sm text-muted-foreground shadow-sm xl:flex">
+                <span className="font-medium text-foreground">{currentUser.name}</span>
+                <span>{currentUser.role === "admin" ? "Администратор" : "Редактор"}</span>
+              </div>
+              <Link href="/api/auth/logout" className={cn("inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground")}>
+                Выйти
+              </Link>
             </div>
           </div>
         </div>
@@ -1625,48 +1618,50 @@ export function MeetingsWorkspaceView({
                                       </div>
                                     </div>
                                   </DropdownMenuItem>
-                                  <DropdownMenuItem
-                                    variant="destructive"
-                                    onClick={() => {
-                                      const confirmed = window.confirm(
-                                        "Удалить встречу и все связанные материалы?"
-                                      )
-                                      if (!confirmed) {
-                                        return
-                                      }
-
-                                      void (async () => {
-                                        await deleteMeeting(meeting.id)
-                                        const nextMeetingId =
-                                          selectedMeetingId === meeting.id
-                                            ? meetingsPageState.items.find(
-                                                (item) => item.id !== meeting.id
-                                              )?.id ?? null
-                                            : selectedMeetingId
-                                        const nextUrl = `/meetings?page=${currentPage}${
-                                          nextMeetingId ? `&meeting=${nextMeetingId}` : ""
-                                        }`
-                                        setMeetingsPageState((current) => ({
-                                          ...current,
-                                          items: current.items.filter((item) => item.id !== meeting.id),
-                                          total: Math.max(0, current.total - 1),
-                                        }))
-                                        if (selectedMeetingId === meeting.id) {
-                                          setSelectedMeetingState(null)
+                                  {canManage ? (
+                                    <DropdownMenuItem
+                                      variant="destructive"
+                                      onClick={() => {
+                                        const confirmed = window.confirm(
+                                          "Удалить встречу и все связанные материалы?"
+                                        )
+                                        if (!confirmed) {
+                                          return
                                         }
-                                        router.replace(nextUrl)
-                                      })()
-                                    }}
-                                    className="items-start gap-3 py-2"
-                                  >
-                                    <Trash2Icon className="mt-0.5 size-4" />
-                                    <div className="space-y-0.5">
-                                      <div className="font-medium">Удалить</div>
-                                      <div className="text-xs text-muted-foreground">
-                                        Удалить встречу и все её материалы.
+
+                                        void (async () => {
+                                          await deleteMeeting(meeting.id)
+                                          const nextMeetingId =
+                                            selectedMeetingId === meeting.id
+                                              ? meetingsPageState.items.find(
+                                                  (item) => item.id !== meeting.id
+                                                )?.id ?? null
+                                              : selectedMeetingId
+                                          const nextUrl = `/meetings?page=${currentPage}${
+                                            nextMeetingId ? `&meeting=${nextMeetingId}` : ""
+                                          }`
+                                          setMeetingsPageState((current) => ({
+                                            ...current,
+                                            items: current.items.filter((item) => item.id !== meeting.id),
+                                            total: Math.max(0, current.total - 1),
+                                          }))
+                                          if (selectedMeetingId === meeting.id) {
+                                            setSelectedMeetingState(null)
+                                          }
+                                          router.replace(nextUrl)
+                                        })()
+                                      }}
+                                      className="items-start gap-3 py-2"
+                                    >
+                                      <Trash2Icon className="mt-0.5 size-4" />
+                                      <div className="space-y-0.5">
+                                        <div className="font-medium">Удалить</div>
+                                        <div className="text-xs text-muted-foreground">
+                                          Удалить встречу и все её материалы.
+                                        </div>
                                       </div>
-                                    </div>
-                                  </DropdownMenuItem>
+                                    </DropdownMenuItem>
+                                  ) : null}
                                 </DropdownMenuContent>
                               </DropdownMenu>
                             </div>
@@ -1753,6 +1748,7 @@ export function MeetingsWorkspaceView({
                   <MeetingDetailView
                     meetingId={selectedMeetingState.id}
                     initialMeeting={selectedMeetingState}
+                    onMeetingChange={setSelectedMeetingState}
                     embedded
                   />
                 </ScrollArea>
@@ -1982,13 +1978,16 @@ export function MeetingsWorkspaceView({
 export function MeetingDetailView({
   meetingId,
   initialMeeting,
+  onMeetingChange,
   embedded = false,
 }: {
   meetingId: string
   initialMeeting: MeetingDetailRecord
+  onMeetingChange?: (meeting: MeetingDetailRecord) => void
   embedded?: boolean
 }) {
   const [activeTab, setActiveTab] = useState("markdown")
+  const [liveMeeting, setLiveMeeting] = useState(initialMeeting)
   const [speakerDrafts, setSpeakerDrafts] = useState<Record<string, string>>(() =>
     Object.fromEntries(
       initialMeeting.speakers.map((speaker) => [speaker.id, speaker.displayName])
@@ -2003,21 +2002,25 @@ export function MeetingDetailView({
   const [error, setError] = useState<string | null>(null)
   const [infoMessage, setInfoMessage] = useState<string | null>(null)
 
+  useEffect(() => {
+    setLiveMeeting(initialMeeting)
+  }, [initialMeeting, meetingId])
+
   const meeting = useMemo(() => {
     const speakerNames = new Map(
-      initialMeeting.speakers.map((speaker) => [
+      liveMeeting.speakers.map((speaker) => [
         speaker.id,
         speakerOverrides[speaker.id] ?? speaker.displayName,
       ])
     )
 
     return {
-      ...initialMeeting,
-      speakers: initialMeeting.speakers.map((speaker) => ({
+      ...liveMeeting,
+      speakers: liveMeeting.speakers.map((speaker) => ({
         ...speaker,
         displayName: speakerNames.get(speaker.id) ?? speaker.displayName,
       })),
-      segments: initialMeeting.segments.map((segment) => ({
+      segments: liveMeeting.segments.map((segment) => ({
         ...segment,
         displayName:
           segment.speakerId != null
@@ -2025,7 +2028,7 @@ export function MeetingDetailView({
             : segment.displayName,
       })),
     }
-  }, [initialMeeting, speakerOverrides])
+  }, [liveMeeting, speakerOverrides])
 
   const combinedMarkdown = useMemo(() => buildReadableMarkdown(meeting), [meeting])
   const transcriptMarkdown = useMemo(() => buildTranscriptMarkdown(meeting), [meeting])
@@ -2046,13 +2049,56 @@ export function MeetingDetailView({
   useEffect(() => {
     setSpeakerDrafts(
       Object.fromEntries(
-        initialMeeting.speakers.map((speaker) => [
+        liveMeeting.speakers.map((speaker) => [
           speaker.id,
           speakerOverrides[speaker.id] ?? speaker.displayName,
         ])
       )
     )
-  }, [initialMeeting, speakerOverrides])
+  }, [liveMeeting, speakerOverrides])
+
+  useEffect(() => {
+    if (!isMeetingProcessing) {
+      return
+    }
+
+    let cancelled = false
+
+    async function refreshMeeting() {
+      try {
+        const nextMeeting = await getMeeting(meetingId)
+        if (cancelled) {
+          return
+        }
+        setLiveMeeting(nextMeeting)
+        onMeetingChange?.(nextMeeting)
+      } catch {
+        // keep current state and retry on the next tick
+      }
+    }
+
+    void refreshMeeting()
+
+    const getIntervalMs = () => (document.hidden ? 15_000 : 5_000)
+    let intervalId = window.setInterval(() => {
+      void refreshMeeting()
+    }, getIntervalMs())
+
+    const handleVisibilityChange = () => {
+      window.clearInterval(intervalId)
+      intervalId = window.setInterval(() => {
+        void refreshMeeting()
+      }, getIntervalMs())
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityChange)
+
+    return () => {
+      cancelled = true
+      document.removeEventListener("visibilitychange", handleVisibilityChange)
+      window.clearInterval(intervalId)
+    }
+  }, [isMeetingProcessing, meetingId, onMeetingChange])
 
   const hasSpeakerChanges = useMemo(
     () =>

@@ -49,11 +49,24 @@ export type UploadStatus = "initiated" | "uploading" | "completed" | "aborted"
 export type ArtifactFormat = "md" | "json"
 export type MeetingStatus = "draft" | "uploaded" | "processing" | "completed" | "failed"
 export type PromptModule = "lms" | "meetings"
+export type AppRole = "admin" | "editor"
 
 export type ApiEnvelope<T> = {
   success: boolean
   data: T
   error: string | null
+}
+
+export interface AuthUser {
+  id: string
+  email: string
+  name: string
+  role: AppRole
+  roles: string[]
+}
+
+export interface AuthMeResponse {
+  user: AuthUser | null
 }
 
 export interface SourceFileRecord {
@@ -364,6 +377,16 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function listProjects(page: number, limit: number) {
   return requestJson<PaginatedProjects>(`/api/projects?page=${page}&limit=${limit}`)
+}
+
+export async function getAuthMe() {
+  const response = await fetch("/api/auth/me", {
+    cache: "no-store",
+  })
+  if (!response.ok) {
+    throw new Error("Не удалось восстановить текущую сессию")
+  }
+  return (await response.json()) as AuthMeResponse
 }
 
 export async function getProject(projectId: string) {

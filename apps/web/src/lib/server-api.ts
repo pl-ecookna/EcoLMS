@@ -1,4 +1,4 @@
-import { headers } from "next/headers"
+import { cookies, headers } from "next/headers"
 
 import type { ApiEnvelope } from "@/lib/ecolms-api"
 
@@ -14,8 +14,12 @@ async function getBaseUrl() {
 }
 
 export async function requestServerJson<T>(path: string): Promise<T> {
+  const requestCookies = await cookies()
   const response = await fetch(`${await getBaseUrl()}${path}`, {
     cache: "no-store",
+    headers: {
+      cookie: requestCookies.toString(),
+    },
   })
 
   const text = await response.text()

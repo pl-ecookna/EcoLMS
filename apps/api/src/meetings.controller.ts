@@ -10,6 +10,7 @@ import {
   Query,
 } from "@nestjs/common"
 
+import { Roles } from "./auth/roles.decorator"
 import {
   type MeetingStageId,
   MeetingsStore,
@@ -77,6 +78,7 @@ export class MeetingsController {
   }
 
   @Delete("meetings/:id")
+  @Roles("admin")
   async deleteMeeting(@Param("id") id: string) {
     return {
       success: true,
@@ -251,6 +253,7 @@ export class MeetingsController {
   }
 
   @Post("meetings/:id/jobs/:jobId/retry")
+  @Roles("admin")
   async retryJob(@Param("id") id: string, @Param("jobId") jobId: string) {
     return {
       success: true,

@@ -9,6 +9,7 @@ import {
   Query,
 } from "@nestjs/common"
 
+import { Roles } from "./auth/roles.decorator"
 import { EcolmsStore } from "./store/ecolms.store"
 
 function toPositiveInt(value: string | undefined, fallback: number) {
@@ -83,6 +84,7 @@ export class ProjectsController {
   }
 
   @Delete(":id/source-files/:sourceFileId")
+  @Roles("admin")
   async deleteSourceFile(
     @Param("id") id: string,
     @Param("sourceFileId") sourceFileId: string
@@ -95,6 +97,7 @@ export class ProjectsController {
   }
 
   @Delete(":id")
+  @Roles("admin")
   async deleteProject(@Param("id") id: string) {
     return {
       success: true,

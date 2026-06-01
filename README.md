@@ -2,6 +2,22 @@
 
 EcoLMS — внутренняя платформа для работы с контентом из медиа- и документных источников. Сейчас в репозитории уже реализован workflow генерации обучающих курсов, а для `meetings` добавлены backend API, схема БД, worker pipeline с `AssemblyAI` как основным провайдером распознавания и UI-раздел `/meetings`. `SaluteSpeech` сохранён как альтернативный провайдер, переключение делается через `env`. Репозиторий организован как `pnpm`-монорепозиторий с четырьмя приложениями: `web`, `api`, `worker` и `transcription-service`.
 
+## Авторизация
+
+- Вход пользователей выполняется через `EcoAuth/Logto`.
+- `apps/web` реализует OIDC login/callback/logout и хранит signed session cookie.
+- `apps/api` не хранит пользовательские сессии и доверяет только signed internal headers от `apps/web`.
+- Локальных пользователей и таблиц паролей в `EcoLMS` нет.
+- Управление пользователями и ролями выполняется только в `EcoAuth`, не внутри `EcoLMS`.
+
+### Роли доступа
+
+- `lms_editor` -> runtime role `editor`
+- `lms_admin` -> runtime role `admin`
+
+`editor` работает с курсами и встречами.  
+`admin` дополнительно управляет промптами и destructive actions.
+
 ## Актуальный стек
 
 - Workspace: `pnpm@10.12.4`
@@ -46,13 +62,19 @@ Browser
 7. Результаты этапов сохраняются в PostgreSQL как артефакты `md` и `json`.
 8. `web` показывает статус проекта, историю задач и позволяет редактировать Markdown-артефакты.
 
+### Обязательная настройка CORS для S3
+
+- Для всех browser-direct uploads в S3-compatible storage обязательно включить CORS на bucket.
+- CORS должен разрешать `PUT` и `OPTIONS` с домена production-фронтенда и с локального `web`-origin при разработке.
+- Без корректного CORS загрузка файлов курсов и встреч из браузера будет завершаться ошибкой на этапе отправки файла.
+
 ## Реализованные приложения
 
 ### `apps/web`
 
 - один экран-дашборд для списка проектов и карточки проекта;
 - отдельный экран `/meetings` в двухпанельной компоновке: список встреч слева, результаты обработки справа;
-- редактор промптов вынесен на отдельную страницу `/prompts` и доступен из LMS и `meetings`;
+- редактор промптов вынесен на отдельную страницу `/prompts` и доступен только `admin`;
 - добавление новой записи встречи прямо из `/meetings`: создать карточку, загрузить один файл и сразу запустить обработку;
 - в `meetings` и LMS используется единый паттерн уведомлений: компактные toast-like alerts в правом нижнем углу;
 - экран `meetings` показывает доступность `LLM`, активного STT-провайдера, баз данных и фоновых модулей через health badge, как в LMS; при создании встречи preflight блокирует только базовую инфраструктуру, а `LLM`/STT служат диагностикой;
@@ -71,6 +93,7 @@ Browser
 
 - глобальный префикс маршрутов: `/api`;
 - контроллеры: `projects`, `uploads`, `jobs`, `artifacts`, `health`, `prompts`;
+- кроме `GET /api/health`, API закрыт trusted auth contract от `apps/web`;
 - health-check агрегирует статус `api`, `postgres`, `redis`, `llm`, `speechProvider`, `worker`, `transcription-service`;
 - хранение и миграция минимальной схемы БД выполняются прямо из `PostgresService`;
 - таблица `llm_prompts` хранит редактируемые prompt templates для `lms` и `meetings`;
@@ -132,10 +155,11 @@ Browser
 1. Создать `.env` на основе `.env.example`.
 2. Установить зависимости: `pnpm install`.
 3. Поднять локальные `Postgres + Redis`: `pnpm dev:infra:up`.
-4. Запустить API: `pnpm dev:api`.
-5. Запустить web: `pnpm dev:web`.
-6. При необходимости запустить transcription service: `pnpm dev:transcription`.
-7. При необходимости запустить worker: `pnpm dev:worker`.
+4. Настроить `ECOLMS_LOGTO_*`, `ECOLMS_SESSION_SECRET` и `ECOLMS_INTERNAL_AUTH_SECRET`.
+5. Запустить API: `pnpm dev:api`.
+6. Запустить web: `pnpm dev:web`.
+7. При необходимости запустить transcription service: `pnpm dev:transcription`.
+8. При необходимости запустить worker: `pnpm dev:worker`.
 
 Примечание: `pnpm dev:worker` использует `uv` и зависимости из [apps/worker/pyproject.toml](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/apps/worker/pyproject.toml), а для обработки встреч `meetings` worker требует доступный `ffmpeg`.
 
@@ -156,6 +180,14 @@ Browser
 Ключевые переменные:
 
 - `ECOLMS_API_BASE_URL`
+- `ECOLMS_LOGTO_ISSUER`
+- `ECOLMS_LOGTO_CLIENT_ID`
+- `ECOLMS_LOGTO_CLIENT_SECRET`
+- `ECOLMS_LOGTO_SCOPE`
+- `ECOLMS_LOGTO_REDIRECT_URI`
+- `ECOLMS_LOGTO_POST_LOGOUT_REDIRECT_URI`
+- `ECOLMS_SESSION_SECRET`
+- `ECOLMS_INTERNAL_AUTH_SECRET`
 - `POSTGRES_URL`
 - `REDIS_URL`
 - `S3_ENDPOINT`

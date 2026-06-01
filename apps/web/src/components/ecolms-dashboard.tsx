@@ -81,6 +81,7 @@ import { cn } from "@/lib/utils"
 
 import {
   abortUpload,
+  type AuthUser,
   completeUpload,
   createProject,
   deleteProject,
@@ -369,7 +370,8 @@ function MarkdownContent({ value }: { value: string }) {
   )
 }
 
-export function EcolmsDashboard() {
+export function EcolmsDashboard({ currentUser }: { currentUser: AuthUser }) {
+  const canManage = currentUser.role === "admin"
   const [projects, setProjects] = useState<ProjectRecord[]>([])
   const [projectTotal, setProjectTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -1173,15 +1175,24 @@ export function EcolmsDashboard() {
               </HoverCardContent>
             </HoverCard>
             <div className="flex items-center gap-2">
-              <Link
-                href="/prompts?module=lms&from=lms"
-                className={buttonVariants({ variant: "outline", size: "sm" })}
-              >
-                <PencilIcon data-icon="inline-start" />
-                Промпты
-              </Link>
+              {canManage ? (
+                <Link
+                  href="/prompts?module=lms&from=lms"
+                  className={buttonVariants({ variant: "outline", size: "sm" })}
+                >
+                  <PencilIcon data-icon="inline-start" />
+                  Промпты
+                </Link>
+              ) : null}
               <Link href="/meetings" className={buttonVariants({ variant: "outline", size: "sm" })}>
                 Модуль встреч
+              </Link>
+              <div className="hidden items-center gap-2 rounded-xl border border-border/70 bg-card/95 px-3 py-2 text-sm text-muted-foreground shadow-sm xl:flex">
+                <span className="font-medium text-foreground">{currentUser.name}</span>
+                <span>{currentUser.role === "admin" ? "Администратор" : "Редактор"}</span>
+              </div>
+              <Link href="/api/auth/logout" className={buttonVariants({ variant: "ghost", size: "sm" })}>
+                Выйти
               </Link>
             </div>
           </header>
@@ -1305,19 +1316,21 @@ export function EcolmsDashboard() {
                                       </div>
                                     </div>
                                   </DropdownMenuItem>
-                                  <DropdownMenuItem
-                                    variant="destructive"
-                                    onClick={() => void handleDeleteProject(project)}
-                                    className="items-start gap-3 py-2"
-                                  >
-                                    <Trash2Icon className="mt-0.5 size-4" />
-                                    <div className="space-y-0.5">
-                                      <div className="whitespace-nowrap font-medium">Удалить</div>
-                                      <div className="text-xs text-muted-foreground">
-                                        Полностью удалить курс и связанные данные.
+                                  {canManage ? (
+                                    <DropdownMenuItem
+                                      variant="destructive"
+                                      onClick={() => void handleDeleteProject(project)}
+                                      className="items-start gap-3 py-2"
+                                    >
+                                      <Trash2Icon className="mt-0.5 size-4" />
+                                      <div className="space-y-0.5">
+                                        <div className="whitespace-nowrap font-medium">Удалить</div>
+                                        <div className="text-xs text-muted-foreground">
+                                          Полностью удалить курс и связанные данные.
+                                        </div>
                                       </div>
-                                    </div>
-                                  </DropdownMenuItem>
+                                    </DropdownMenuItem>
+                                  ) : null}
                                 </DropdownMenuContent>
                               </DropdownMenu>
                             </div>
@@ -1897,14 +1910,16 @@ export function EcolmsDashboard() {
                               {(file.sizeBytes / 1024 / 1024).toFixed(1)} МБ
                             </TableCell>
                             <TableCell>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => void handleDeleteSourceFile(file.id)}
-                                disabled={mutating}
-                              >
-                                Удалить
-                              </Button>
+                              {canManage ? (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => void handleDeleteSourceFile(file.id)}
+                                  disabled={mutating}
+                                >
+                                  Удалить
+                                </Button>
+                              ) : null}
                             </TableCell>
                           </TableRow>
                         ))

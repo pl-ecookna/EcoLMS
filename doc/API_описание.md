@@ -158,6 +158,8 @@
 - `POST /api/meeting-uploads/{uploadId}/abort`
   Прерывает upload.
 
+Примечание: так как загрузка файлов идёт напрямую из браузера в S3-compatible storage по signed URL, для bucket обязательно настроить CORS. Bucket должен разрешать `PUT` и `OPTIONS`, а также origin production-фронтенда и локального `web` при разработке.
+
 ### Meeting processing
 
 - `POST /api/meetings/{id}/start`
@@ -208,16 +210,25 @@
 ### Prompt management
 
 - `GET /api/prompts`
-  Возвращает список всех редактируемых промптов.
+  Возвращает список всех редактируемых промптов. Требует аутентификацию.
 
 - `GET /api/prompts?module=lms`
-  Возвращает только промпты выбранного модуля: `lms` или `meetings`.
+  Возвращает только промпты выбранного модуля: `lms` или `meetings`. Требует аутентификацию.
 
 - `GET /api/prompts/{module}/{promptKey}`
-  Возвращает один промпт по ключу.
+  Возвращает один промпт по ключу. Требует аутентификацию.
 
 - `PATCH /api/prompts/{module}/{promptKey}`
-  Обновляет `title`, `systemPrompt`, `userPromptTemplate`.
+  Обновляет `title`, `systemPrompt`, `userPromptTemplate`. Доступно только `admin`.
+
+### Auth behavior
+
+- Пользовательский вход выполняется через `apps/web` и `EcoAuth/Logto`.
+- `apps/api` не имеет собственного login endpoint.
+- Все user-facing `/api/*` маршруты, кроме `GET /api/health`, требуют trusted auth context от `apps/web`.
+- Роли приложения:
+  - `editor` - стандартная работа с курсами и встречами
+  - `admin` - prompt management и destructive actions
 
 ## Формат ответа
 

@@ -16,6 +16,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import {
   listPrompts,
+  type AuthUser,
   type PromptModule,
   type PromptRecord,
   updatePrompt,
@@ -28,6 +29,7 @@ type PromptDraft = {
 }
 
 type PromptEditorWorkspaceProps = {
+  currentUser: AuthUser
   preferredModule?: PromptModule
   backHref: string
   backLabel: string
@@ -50,6 +52,7 @@ function formatDateLabel(value: string) {
 }
 
 export function PromptEditorWorkspace({
+  currentUser,
   preferredModule = "lms",
   backHref,
   backLabel,
@@ -185,6 +188,13 @@ export function PromptEditorWorkspace({
             <div className="flex items-center gap-2">
               <Badge variant="outline">LMS</Badge>
               <Badge variant="outline">Meetings</Badge>
+              <div className="hidden items-center gap-2 rounded-xl border border-border/70 bg-card/95 px-3 py-2 text-sm text-muted-foreground shadow-sm xl:flex">
+                <span className="font-medium text-foreground">{currentUser.name}</span>
+                <span>Администратор</span>
+              </div>
+              <Link className={cn("inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground")} href="/api/auth/logout">
+                Выйти
+              </Link>
             </div>
           </div>
         </header>

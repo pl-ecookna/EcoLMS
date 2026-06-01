@@ -1,4 +1,5 @@
 import { MeetingsWorkspaceView } from "@/components/meetings-client"
+import { requireAuthUser } from "@/lib/auth/server"
 import { requestServerJson } from "@/lib/server-api"
 import type { MeetingDetailRecord, PaginatedMeetings } from "@/lib/ecolms-api"
 
@@ -13,6 +14,7 @@ export default async function MeetingsPage({
     info?: string
   }
 }) {
+  const currentUser = await requireAuthUser("/meetings")
   const pageParam = Number(searchParams?.page ?? 1)
   const initialPage = Number.isFinite(pageParam) && pageParam > 0 ? pageParam : 1
   const selectedMeetingId = searchParams?.meeting?.trim() || null
@@ -26,6 +28,7 @@ export default async function MeetingsPage({
 
   return (
     <MeetingsWorkspaceView
+      currentUser={currentUser}
       currentPage={initialPage}
       pageData={pageData}
       selectedMeetingId={selectedMeetingIdResolved}

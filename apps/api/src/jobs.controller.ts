@@ -1,5 +1,6 @@
 import { Controller, Get, Param, Post } from "@nestjs/common"
 
+import { Roles } from "./auth/roles.decorator"
 import { EcolmsStore } from "./store/ecolms.store"
 
 @Controller()
@@ -16,6 +17,7 @@ export class JobsController {
   }
 
   @Post("projects/:id/jobs/:jobId/retry")
+  @Roles("admin")
   async retryJob(@Param("id") id: string, @Param("jobId") jobId: string) {
     return {
       success: true,

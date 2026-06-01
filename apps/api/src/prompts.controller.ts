@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Param, Patch, Query } from "@nestjs/common"
 
+import { Roles } from "./auth/roles.decorator"
 import { EcolmsStore, type PromptModule } from "./store/ecolms.store"
 
 @Controller("prompts")
@@ -28,6 +29,7 @@ export class PromptsController {
   }
 
   @Patch(":module/:promptKey")
+  @Roles("admin")
   async updatePrompt(
     @Param("module") module: PromptModule,
     @Param("promptKey") promptKey: string,

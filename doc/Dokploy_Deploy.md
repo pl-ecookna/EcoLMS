@@ -37,10 +37,19 @@
 - `PORT=3000`
 - `HOSTNAME=0.0.0.0`
 - `ECOLMS_API_BASE_URL=http://api:3001`
+- `ECOLMS_LOGTO_ISSUER`
+- `ECOLMS_LOGTO_CLIENT_ID`
+- `ECOLMS_LOGTO_CLIENT_SECRET`
+- `ECOLMS_LOGTO_SCOPE=openid profile email roles`
+- `ECOLMS_LOGTO_REDIRECT_URI`
+- `ECOLMS_LOGTO_POST_LOGOUT_REDIRECT_URI`
+- `ECOLMS_SESSION_SECRET`
+- `ECOLMS_INTERNAL_AUTH_SECRET`
 
 ### `api`
 
 - `API_PORT=3001`
+- `ECOLMS_INTERNAL_AUTH_SECRET`
 - `POSTGRES_URL`
 - `REDIS_URL`
 - `S3_ENDPOINT`
@@ -74,12 +83,19 @@
 
 1. Создать новый Docker Compose проект.
 2. Указать файл [docker-compose.dokploy.yml](/Users/romangaleev/CodeProject/Ecookna/EcoLMS/docker-compose.dokploy.yml).
-3. Подставить секреты для `POSTGRES_URL`, `REDIS_URL`, `S3_*`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`.
+3. Подставить секреты для `ECOLMS_LOGTO_*`, `ECOLMS_SESSION_SECRET`, `ECOLMS_INTERNAL_AUTH_SECRET`, `POSTGRES_URL`, `REDIS_URL`, `S3_*`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`.
 4. Развернуть stack.
 5. Проверить healthchecks:
    - `web` на `/`
    - `api` на `/api/health`
    - `transcription-service` на `/health`
+
+## Auth notes
+
+- Пользовательский вход выполняется только через `EcoAuth/Logto`.
+- `api` не хранит browser session и не публикует собственный login.
+- `apps/web` хранит signed session cookie и проксирует запросы в `api` с trusted headers.
+- Источник истины для пользователей и ролей находится в `EcoAuth`, не в `EcoLMS`.
 
 ## Что нужно помнить
 
