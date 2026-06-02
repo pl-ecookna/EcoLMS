@@ -1520,7 +1520,15 @@ export function MeetingsWorkspaceView({
                 <span className="font-medium text-foreground">{currentUser.name}</span>
                 <span>{currentUser.role === "admin" ? "Администратор" : "Редактор"}</span>
               </div>
-              <Link href="/api/auth/logout" className={cn("inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground")}>
+              <Link
+                href="/api/auth/logout"
+                prefetch={false}
+                className={cn("inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground")}
+                onClick={(event) => {
+                  event.preventDefault()
+                  window.location.assign("/api/auth/logout")
+                }}
+              >
                 Выйти
               </Link>
             </div>

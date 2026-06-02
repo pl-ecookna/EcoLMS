@@ -370,7 +370,11 @@ function MarkdownContent({ value }: { value: string }) {
   )
 }
 
-export function EcolmsDashboard({ currentUser }: { currentUser: AuthUser }) {
+export function EcolmsDashboard({
+  currentUser,
+}: {
+  currentUser: AuthUser
+}) {
   const canManage = currentUser.role === "admin"
   const [projects, setProjects] = useState<ProjectRecord[]>([])
   const [projectTotal, setProjectTotal] = useState(0)
@@ -1187,14 +1191,30 @@ export function EcolmsDashboard({ currentUser }: { currentUser: AuthUser }) {
                   Промпты
                 </Link>
               ) : null}
-              <Link href="/meetings" className={buttonVariants({ variant: "outline", size: "sm" })}>
+              <Link
+                href="/meetings"
+                prefetch={false}
+                className={buttonVariants({ variant: "outline", size: "sm" })}
+                onClick={(event) => {
+                  event.preventDefault()
+                  window.location.assign("/meetings")
+                }}
+              >
                 Модуль встреч
               </Link>
               <div className="hidden items-center gap-2 rounded-xl border border-border/70 bg-card/95 px-3 py-2 text-sm text-muted-foreground shadow-sm xl:flex">
                 <span className="font-medium text-foreground">{currentUser.name}</span>
                 <span>{currentUser.role === "admin" ? "Администратор" : "Редактор"}</span>
               </div>
-              <Link href="/api/auth/logout" className={buttonVariants({ variant: "ghost", size: "sm" })}>
+              <Link
+                href="/api/auth/logout"
+                prefetch={false}
+                className={buttonVariants({ variant: "ghost", size: "sm" })}
+                onClick={(event) => {
+                  event.preventDefault()
+                  window.location.assign("/api/auth/logout")
+                }}
+              >
                 Выйти
               </Link>
             </div>

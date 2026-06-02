@@ -1,6 +1,8 @@
 # Changelog
 
 ## 2026-06-02
+- Replaced `Link`-based logout actions with plain anchor navigation so App Router prefetch cannot trigger `/api/auth/logout` in the background and drop the session on refresh.
+- Forced full-page navigation from LMS dashboard to `/meetings` and disabled prefetch for that entrypoint to avoid stale auth-sensitive App Router cache sending users back to the start screen.
 - Fixed LMS course selection in the left panel after auth rollout: cards now show pointer affordance, highlight by active selection immediately, avoid nested interactive markup, and retry detail loading when the selected course has an empty right pane.
 - Added explicit links from `EcoLMS` docs to the shared `EcoAuth` authorization and `Logto` reference documents.
 

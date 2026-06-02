@@ -1,0 +1,27 @@
+- generic [active] [ref=e1]:
+  - main [ref=e2]:
+    - main [ref=e3]:
+      - generic [ref=e6]:
+        - generic [ref=e7]:
+          - img [ref=e8]
+          - text: LMS
+        - generic [ref=e11]:
+          - heading "Вход в EcoLMS" [level=1] [ref=e12]
+          - paragraph [ref=e13]: Единый вход для доступа к курсам, встречам и настройкам промптов.
+        - generic [ref=e14]:
+          - generic [ref=e16]:
+            - img [ref=e18]
+            - generic [ref=e21]: Единый вход
+            - generic [ref=e22]: Один логин для всех внутренних сервисов EcoAuth.
+          - generic [ref=e24]:
+            - img [ref=e26]
+            - generic [ref=e29]: Защищённая сессия
+            - generic [ref=e30]: Сессия хранится в приложении и используется для безопасного доступа к API.
+          - generic [ref=e32]:
+            - img [ref=e34]
+            - generic [ref=e37]: Быстрый старт
+            - generic [ref=e38]: После входа сразу открывается рабочее пространство LMS и модуля встреч.
+        - button "Войти" [ref=e40] [cursor=pointer]:
+          - text: Войти
+          - img
+  - alert [ref=e41]
