@@ -1,27 +1,87 @@
-import { cookies, headers } from "next/headers"
+import { cookies } from "next/headers"
 
 import type { ApiEnvelope } from "@/lib/ecolms-api"
+import { buildInternalAuthHeaders, getSessionUser } from "@/lib/auth/logto"
 
-async function getBaseUrl() {
-  const requestHeaders = await headers()
-  const protocol = requestHeaders.get("x-forwarded-proto") ?? "http"
-  const host =
-    requestHeaders.get("x-forwarded-host") ??
-    requestHeaders.get("host") ??
-    "localhost:3000"
+const INTERNAL_API_URLS = [
+  "http://app-calculate-open-source-alarm-cob2f6:3001",
+  "http://api:3001",
+] as const
 
-  return `${protocol}://${host}`
+function normalizeBaseUrl(value: string | undefined) {
+  if (!value) {
+    return undefined
+  }
+
+  if (
+    value.includes("api:3001") ||
+    value.includes("localhost:3001") ||
+    value.includes("127.0.0.1:3001")
+  ) {
+    return process.env.NODE_ENV === "production"
+      ? INTERNAL_API_URLS[0]
+      : "http://localhost:3101"
+  }
+
+  return value
 }
+
+const UPSTREAM_BASE_URLS =
+  process.env.NODE_ENV === "production"
+    ? [
+        normalizeBaseUrl(process.env.ECOLMS_API_BASE_URL),
+        ...INTERNAL_API_URLS,
+      ].filter((value): value is string => Boolean(value))
+    : [
+        normalizeBaseUrl(process.env.ECOLMS_API_BASE_URL) ??
+          "http://localhost:3101",
+      ]
 
 export async function requestServerJson<T>(path: string): Promise<T> {
   const requestCookies = await cookies()
-  const response = await fetch(`${await getBaseUrl()}${path}`, {
-    cache: "no-store",
-    headers: {
-      cookie: requestCookies.toString(),
-    },
+  const user = getSessionUser({ cookie: requestCookies.toString() })
+  if (!user) {
+    throw new Error("Требуется вход в EcoLMS")
+  }
+
+  const headers = new Headers({
+    accept: "application/json",
+    ...buildInternalAuthHeaders(user),
   })
 
+  let lastNetworkError: unknown = null
+  let lastResponse: Response | null = null
+
+  for (const baseUrl of UPSTREAM_BASE_URLS) {
+    const upstreamUrl = new URL(`${baseUrl.replace(/\/$/, "")}${path}`)
+
+    try {
+      const response = await fetch(upstreamUrl, {
+        cache: "no-store",
+        headers,
+      })
+
+      lastResponse = response
+      if (response.status < 500) {
+        return parseApiResponse<T>(response)
+      }
+    } catch (error) {
+      lastNetworkError = error
+    }
+  }
+
+  if (lastResponse) {
+    return parseApiResponse<T>(lastResponse)
+  }
+
+  throw new Error(
+    lastNetworkError instanceof Error
+      ? lastNetworkError.message
+      : "Не удалось выполнить запрос"
+  )
+}
+
+async function parseApiResponse<T>(response: Response): Promise<T> {
   const text = await response.text()
   let payload: ApiEnvelope<T> | null = null
   if (text) {
