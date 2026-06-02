@@ -10,6 +10,11 @@ EcoLMS — внутренняя платформа для работы с кон
 - Локальных пользователей и таблиц паролей в `EcoLMS` нет.
 - Управление пользователями и ролями выполняется только в `EcoAuth`, не внутри `EcoLMS`.
 
+Актуальные документы по авторизации и `Logto` находятся в соседнем проекте `EcoAuth`:
+- общие принципы и архитектура: [docs/architecture/central-auth.md](/Users/romangaleev/CodeProject/Ecookna/EcoAuth/docs/architecture/central-auth.md)
+- рабочие адреса, роли, клиенты и operational notes: [docs/operations/access-inventory.md](/Users/romangaleev/CodeProject/Ecookna/EcoAuth/docs/operations/access-inventory.md)
+- инструкция по управлению пользователями и ролями: [docs/operations/account-admin-guide.md](/Users/romangaleev/CodeProject/Ecookna/EcoAuth/docs/operations/account-admin-guide.md)
+
 ### Роли доступа
 
 - `lms_editor` -> runtime role `editor`

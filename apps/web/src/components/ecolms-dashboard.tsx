@@ -600,6 +600,9 @@ export function EcolmsDashboard({ currentUser }: { currentUser: AuthUser }) {
 
   function handleSelectProject(projectId: string) {
     if (projectId === selectedId) {
+      if (!selectedProject || selectedProject.id !== projectId || detailError) {
+        void refreshProject(projectId)
+      }
       return true
     }
     if (!confirmDiscardUnsavedChanges()) {
@@ -1232,117 +1235,129 @@ export function EcolmsDashboard({ currentUser }: { currentUser: AuthUser }) {
                       <div className="space-y-3 p-3">
                         {projects.map((project) => {
                           const statusForBadge = displayProjectStatus(project)
+                          const isSelected = project.id === selectedId
                           return (
-                          <button
-                            key={project.id}
-                            type="button"
-                            className={cn(
-                              "w-full rounded-2xl border p-2.5 text-left transition-colors hover:bg-muted/35",
-                              project.id === selectedProject?.id
-                                ? "border-primary/30 bg-muted/30 shadow-sm"
-                                : "border-border/70 bg-card/95"
-                            )}
-                            onClick={() => handleSelectProject(project.id)}
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <div className="truncate text-base font-semibold">
-                                  {project.name}
+                            <div
+                              key={project.id}
+                              role="button"
+                              tabIndex={0}
+                              aria-pressed={isSelected}
+                              aria-label={`Открыть курс ${project.name}`}
+                              className={cn(
+                                "w-full cursor-pointer rounded-2xl border p-2.5 text-left transition-colors hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+                                isSelected
+                                  ? "border-primary/30 bg-muted/30 shadow-sm"
+                                  : "border-border/70 bg-card/95"
+                              )}
+                              onClick={() => {
+                                handleSelectProject(project.id)
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter" || event.key === " ") {
+                                  event.preventDefault()
+                                  handleSelectProject(project.id)
+                                }
+                              }}
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="truncate text-base font-semibold">
+                                    {project.name}
+                                  </div>
                                 </div>
-                              </div>
-                              <DropdownMenu>
-                                <DropdownMenuTrigger
-                                  disabled={mutating}
-                                  className={cn(
-                                    buttonVariants({ variant: "ghost", size: "icon-sm" }),
-                                    "shrink-0"
-                                  )}
-                                  onClick={(event) => event.stopPropagation()}
-                                  onMouseDown={(event) => event.stopPropagation()}
-                                >
-                                  <span className="sr-only">Действия курса</span>
-                                  <MoreHorizontalIcon className="size-4" />
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end" className="min-w-72 max-w-72">
-                                  <DropdownMenuItem
-                                    onClick={() => {
-                                      if (handleSelectProject(project.id)) {
-                                        setEditOpen(true)
-                                      }
-                                    }}
-                                    className="items-start gap-3 py-2"
-                                  >
-                                    <PencilIcon className="mt-0.5 size-4" />
-                                    <div className="space-y-0.5">
-                                      <div className="whitespace-nowrap font-medium">
-                                        Редактировать
-                                      </div>
-                                      <div className="text-xs text-muted-foreground">
-                                        Открыть настройки и файлы выбранного курса.
-                                      </div>
-                                    </div>
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem
-                                    onClick={() => void handleGenerateAllForProject(project.id)}
-                                    className="items-start gap-3 py-2"
-                                  >
-                                    {generatingStage === "source_compiled" && mutating ? (
-                                      <Loader2Icon className="mt-0.5 size-4 animate-spin" />
-                                    ) : (
-                                      <WandSparklesIcon className="mt-0.5 size-4" />
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger
+                                    disabled={mutating}
+                                    className={cn(
+                                      buttonVariants({ variant: "ghost", size: "icon-sm" }),
+                                      "shrink-0"
                                     )}
-                                    <div className="space-y-0.5">
-                                      <div className="whitespace-nowrap font-medium">
-                                        Автогенерация
-                                      </div>
-                                      <div className="text-xs text-muted-foreground">
-                                        Последовательно запустить источник, план, материалы и тест.
-                                      </div>
-                                    </div>
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem
-                                    onClick={() =>
-                                      void handleOpenStructuredSource(project.id, project.name)
-                                    }
-                                    className="items-start gap-3 py-2"
+                                    onClick={(event) => event.stopPropagation()}
+                                    onMouseDown={(event) => event.stopPropagation()}
                                   >
-                                    <FileTextIcon className="mt-0.5 size-4" />
-                                    <div className="space-y-0.5">
-                                      <div className="whitespace-nowrap font-medium">
-                                        Показать источник
-                                      </div>
-                                      <div className="text-xs text-muted-foreground">
-                                        Открыть исходный текст после анализа и распознавания.
-                                      </div>
-                                    </div>
-                                  </DropdownMenuItem>
-                                  {canManage ? (
+                                    <span className="sr-only">Действия курса</span>
+                                    <MoreHorizontalIcon className="size-4" />
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="end" className="min-w-72 max-w-72">
                                     <DropdownMenuItem
-                                      variant="destructive"
-                                      onClick={() => void handleDeleteProject(project)}
+                                      onClick={() => {
+                                        if (handleSelectProject(project.id)) {
+                                          setEditOpen(true)
+                                        }
+                                      }}
                                       className="items-start gap-3 py-2"
                                     >
-                                      <Trash2Icon className="mt-0.5 size-4" />
+                                      <PencilIcon className="mt-0.5 size-4" />
                                       <div className="space-y-0.5">
-                                        <div className="whitespace-nowrap font-medium">Удалить</div>
+                                        <div className="whitespace-nowrap font-medium">
+                                          Редактировать
+                                        </div>
                                         <div className="text-xs text-muted-foreground">
-                                          Полностью удалить курс и связанные данные.
+                                          Открыть настройки и файлы выбранного курса.
                                         </div>
                                       </div>
                                     </DropdownMenuItem>
-                                  ) : null}
-                                </DropdownMenuContent>
-                              </DropdownMenu>
+                                    <DropdownMenuItem
+                                      onClick={() => void handleGenerateAllForProject(project.id)}
+                                      className="items-start gap-3 py-2"
+                                    >
+                                      {generatingStage === "source_compiled" && mutating ? (
+                                        <Loader2Icon className="mt-0.5 size-4 animate-spin" />
+                                      ) : (
+                                        <WandSparklesIcon className="mt-0.5 size-4" />
+                                      )}
+                                      <div className="space-y-0.5">
+                                        <div className="whitespace-nowrap font-medium">
+                                          Автогенерация
+                                        </div>
+                                        <div className="text-xs text-muted-foreground">
+                                          Последовательно запустить источник, план, материалы и тест.
+                                        </div>
+                                      </div>
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                      onClick={() =>
+                                        void handleOpenStructuredSource(project.id, project.name)
+                                      }
+                                      className="items-start gap-3 py-2"
+                                    >
+                                      <FileTextIcon className="mt-0.5 size-4" />
+                                      <div className="space-y-0.5">
+                                        <div className="whitespace-nowrap font-medium">
+                                          Показать источник
+                                        </div>
+                                        <div className="text-xs text-muted-foreground">
+                                          Открыть исходный текст после анализа и распознавания.
+                                        </div>
+                                      </div>
+                                    </DropdownMenuItem>
+                                    {canManage ? (
+                                      <DropdownMenuItem
+                                        variant="destructive"
+                                        onClick={() => void handleDeleteProject(project)}
+                                        className="items-start gap-3 py-2"
+                                      >
+                                        <Trash2Icon className="mt-0.5 size-4" />
+                                        <div className="space-y-0.5">
+                                          <div className="whitespace-nowrap font-medium">Удалить</div>
+                                          <div className="text-xs text-muted-foreground">
+                                            Полностью удалить курс и связанные данные.
+                                          </div>
+                                        </div>
+                                      </DropdownMenuItem>
+                                    ) : null}
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              </div>
+                              <div className="mt-2 flex items-center justify-end gap-2">
+                                <Badge variant={projectStatusBadgeVariant(statusForBadge)}>
+                                  {projectStatusLabels[statusForBadge]}
+                                </Badge>
+                              </div>
+                              <div className="mt-0.5 text-xs text-muted-foreground">
+                                {formatDateLabel(project.updatedAt)}
+                              </div>
                             </div>
-                            <div className="mt-2 flex items-center justify-end gap-2">
-                              <Badge variant={projectStatusBadgeVariant(statusForBadge)}>
-                                {projectStatusLabels[statusForBadge]}
-                              </Badge>
-                            </div>
-                            <div className="mt-0.5 text-xs text-muted-foreground">
-                              {formatDateLabel(project.updatedAt)}
-                            </div>
-                          </button>
                           )
                         })}
                       </div>
