@@ -23,7 +23,6 @@ import {
   MoreHorizontalIcon,
   VideoIcon,
   UploadIcon,
-  WandSparklesIcon,
   Trash2Icon,
   XCircleIcon,
   XIcon,
@@ -1439,18 +1438,11 @@ export function MeetingsWorkspaceView({
                   <ArrowLeftIcon data-icon="inline-start" />
                   LMS
                 </Button>
-                <Badge variant="secondary">
-                  <WandSparklesIcon data-icon="inline-start" />
-                  Встречи
-                </Badge>
               </div>
               <div className="space-y-2">
                 <h1 className="font-heading text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
                   Встречи
                 </h1>
-                <p className="max-w-2xl text-sm leading-7 text-muted-foreground sm:text-base">
-                  Единое рабочее пространство для формирования, протоколов и поручений.
-                </p>
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
