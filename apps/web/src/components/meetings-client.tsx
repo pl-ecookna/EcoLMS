@@ -78,6 +78,7 @@ import {
   HoverCardContent,
   HoverCardTrigger,
 } from "@/components/ui/hover-card"
+import { UserMenu } from "@/components/user-menu"
 import {
   meetingStageLabels,
   type AuthUser,
@@ -1453,17 +1454,6 @@ export function MeetingsWorkspaceView({
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {canManage ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  nativeButton={false}
-                  render={<Link href="/prompts?module=meetings&from=meetings" />}
-                >
-                  <SquarePenIcon data-icon="inline-start" />
-                  Промпты
-                </Button>
-              ) : null}
               <HoverCard>
                 <HoverCardTrigger
                   render={
@@ -1516,21 +1506,10 @@ export function MeetingsWorkspaceView({
                   </div>
                 </HoverCardContent>
               </HoverCard>
-              <div className="hidden items-center gap-2 rounded-xl border border-border/70 bg-card/95 px-3 py-2 text-sm text-muted-foreground shadow-sm xl:flex">
-                <span className="font-medium text-foreground">{currentUser.name}</span>
-                <span>{currentUser.role === "admin" ? "Администратор" : "Редактор"}</span>
-              </div>
-              <Link
-                href="/api/auth/logout"
-                prefetch={false}
-                className={cn("inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground")}
-                onClick={(event) => {
-                  event.preventDefault()
-                  window.location.assign("/api/auth/logout")
-                }}
-              >
-                Выйти
-              </Link>
+              <UserMenu
+                user={currentUser}
+                promptsHref="/prompts?module=meetings&from=meetings"
+              />
             </div>
           </div>
         </div>

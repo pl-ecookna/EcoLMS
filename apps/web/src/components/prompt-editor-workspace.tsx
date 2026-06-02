@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
+import { UserMenu } from "@/components/user-menu"
 import { cn } from "@/lib/utils"
 import {
   listPrompts,
@@ -188,21 +189,7 @@ export function PromptEditorWorkspace({
             <div className="flex items-center gap-2">
               <Badge variant="outline">LMS</Badge>
               <Badge variant="outline">Meetings</Badge>
-              <div className="hidden items-center gap-2 rounded-xl border border-border/70 bg-card/95 px-3 py-2 text-sm text-muted-foreground shadow-sm xl:flex">
-                <span className="font-medium text-foreground">{currentUser.name}</span>
-                <span>Администратор</span>
-              </div>
-              <Link
-                href="/api/auth/logout"
-                prefetch={false}
-                className={cn("inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground")}
-                onClick={(event) => {
-                  event.preventDefault()
-                  window.location.assign("/api/auth/logout")
-                }}
-              >
-                Выйти
-              </Link>
+              <UserMenu user={currentUser} />
             </div>
           </div>
         </header>
