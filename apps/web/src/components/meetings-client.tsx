@@ -139,6 +139,27 @@ function formatDuration(seconds: number | null | undefined) {
   return `${restMinutes} мин ${restSeconds.toString().padStart(2, "0")} с`
 }
 
+function formatEstimateDuration(seconds: number | null | undefined) {
+  if (seconds == null) {
+    return null
+  }
+
+  return formatDuration(seconds)
+}
+
+function meetingProcessingEstimateText(meeting: MeetingDetailRecord | MeetingListRecord) {
+  const estimate = formatEstimateDuration(meeting.processingMetrics.estimatedSeconds)
+  if (!estimate) {
+    return null
+  }
+
+  if (meeting.processingMetrics.estimationSampleSize > 0) {
+    return `около ${estimate} по ${meeting.processingMetrics.estimationSampleSize} завершённым записям`
+  }
+
+  return `около ${estimate}`
+}
+
 function meetingStatusLabel(status: MeetingStatus) {
   switch (status) {
     case "draft":
@@ -270,6 +291,14 @@ function isMeetingActiveStatus(status: MeetingStatus) {
   return status === "uploaded" || status === "processing"
 }
 
+function isMeetingUploadPending(meeting: MeetingDetailRecord | MeetingListRecord) {
+  return (
+    meeting.status === "uploaded" &&
+    meeting.sourceFile?.uploadStatus != null &&
+    meeting.sourceFile.uploadStatus !== "completed"
+  )
+}
+
 function toTime(value: string | null | undefined) {
   if (!value) {
     return 0
@@ -397,6 +426,18 @@ function hasEffectiveActiveMeetingJob(meeting: MeetingDetailRecord) {
     const status = getMeetingStageUiStatus(meeting, stage)
     return status === "queued" || status === "processing"
   })
+}
+
+function hasLiveMeetingPipeline(meeting: MeetingDetailRecord | null) {
+  if (!meeting) {
+    return false
+  }
+
+  if (hasEffectiveActiveMeetingJob(meeting)) {
+    return true
+  }
+
+  return meeting.status === "processing"
 }
 
 function getMeetingProcessingProgress(meeting: MeetingDetailRecord | null) {
@@ -603,7 +644,7 @@ function MeetingInfoSheet({
                   {meeting.description || "Описание не заполнено."}
                 </CardDescription>
               </CardHeader>
-              <CardContent className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-4">
+              <CardContent className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-6">
                 <div className="rounded-2xl border p-4">
                   <div className="text-sm text-muted-foreground">Статус</div>
                   <div className="mt-2">
@@ -628,6 +669,20 @@ function MeetingInfoSheet({
                   <div className="text-sm text-muted-foreground">Источник</div>
                   <div className="mt-2 text-sm font-medium">
                     {sourceFileLabel(meeting)}
+                  </div>
+                </div>
+                <div className="rounded-2xl border p-4">
+                  <div className="text-sm text-muted-foreground">Факт обработки</div>
+                  <div className="mt-2 text-sm font-medium">
+                    {meeting.processingMetrics.actualSeconds != null
+                      ? formatDuration(meeting.processingMetrics.actualSeconds)
+                      : "—"}
+                  </div>
+                </div>
+                <div className="rounded-2xl border p-4">
+                  <div className="text-sm text-muted-foreground">Прогноз обработки</div>
+                  <div className="mt-2 text-sm font-medium">
+                    {meetingProcessingEstimateText(meeting) ?? "Недостаточно данных"}
                   </div>
                 </div>
               </CardContent>
@@ -835,6 +890,7 @@ function MeetingProcessingState({
     "meeting_actions",
   ]
   const progress = getMeetingProcessingProgress(meeting)
+  const estimateText = meetingProcessingEstimateText(meeting)
 
   return (
     <Card className="border-dashed border-border/70 bg-card/95 shadow-sm">
@@ -843,7 +899,9 @@ function MeetingProcessingState({
           <div className="space-y-1">
             <div className="text-sm font-semibold tracking-tight">Обработка встречи выполняется</div>
             <div className="text-sm leading-6 text-muted-foreground">
-              Статусы обновляются автоматически, страницу обновлять не нужно.
+              {estimateText
+                ? `Ожидаемое время: ${estimateText}. Статусы обновляются автоматически, страницу обновлять не нужно.`
+                : "Статусы обновляются автоматически, страницу обновлять не нужно."}
             </div>
           </div>
           <Badge variant="outline" className="border-primary/20 bg-primary/10 text-primary">
@@ -946,6 +1004,18 @@ function MeetingCardProgress({
     return null
   }
 
+  if (isMeetingUploadPending(meeting)) {
+    return (
+      <div className="mt-2 space-y-1.5">
+        <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+          <span>Загрузка подтверждается</span>
+          <span>0%</span>
+        </div>
+        <Progress value={0} className="h-1.5" />
+      </div>
+    )
+  }
+
   const progress =
     "jobs" in meeting
       ? getMeetingProcessingProgress(meeting)
@@ -959,7 +1029,11 @@ function MeetingCardProgress({
     <div className="mt-2 space-y-1.5">
       <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
         <span>
-          {currentStatus === "failed" ? "Обработка остановлена" : "Идёт обработка"}
+          {currentStatus === "failed"
+            ? "Обработка остановлена"
+            : currentStatus === "uploaded"
+              ? "Ожидает запуска"
+              : "Идёт обработка"}
         </span>
         <span>{progress}%</span>
       </div>
@@ -1408,10 +1482,17 @@ export function MeetingsWorkspaceView({
 
       await uploadMeetingFile(created.id, meetingFile)
       setCreateMessage("Запускаем обработку")
-      await startMeeting(created.id)
+      const started = await startMeeting(created.id)
+      const expectedProcessingTime = meetingProcessingEstimateText(started.meeting)
       setCreatePhase("done")
       setCreateMessage("Запись добавлена и отправлена в обработку")
-      notify("success", "Запись добавлена", "Встреча создана и отправлена в обработку.")
+      notify(
+        "success",
+        "Запись добавлена",
+        expectedProcessingTime
+          ? `Встреча создана и отправлена в обработку. Ожидаемое время: ${expectedProcessingTime}.`
+          : "Встреча создана и отправлена в обработку."
+      )
       setCreateOpen(false)
       resetCreateMeetingForm()
       setSelectedMeetingState(null)
@@ -2011,10 +2092,8 @@ export function MeetingDetailView({
 
   const combinedMarkdown = useMemo(() => buildReadableMarkdown(meeting), [meeting])
   const transcriptMarkdown = useMemo(() => buildTranscriptMarkdown(meeting), [meeting])
-  const isMeetingProcessing =
-    (isMeetingActiveStatus(meeting.status) &&
-      getMeetingProcessingProgress(meeting) < 100) ||
-    hasEffectiveActiveMeetingJob(meeting)
+  const isMeetingProcessing = hasLiveMeetingPipeline(meeting)
+  const isUploadPending = isMeetingUploadPending(meeting)
   const hasMarkdownArtifacts =
     Boolean(getArtifact(meeting, "meeting_summary")?.contentMd?.trim()) ||
     Boolean(getArtifact(meeting, "meeting_protocol")?.contentMd?.trim()) ||
@@ -2198,6 +2277,16 @@ export function MeetingDetailView({
             <InfoIcon />
             <AlertTitle>Материалы обновляются</AlertTitle>
             <AlertDescription>{infoMessage}</AlertDescription>
+          </Alert>
+        ) : null}
+
+        {isUploadPending ? (
+          <Alert>
+            <InfoIcon />
+            <AlertTitle>Загрузка записи завершается</AlertTitle>
+            <AlertDescription>
+              Файл уже отправлен в S3. Как только система подтвердит загрузку, обработка запустится автоматически.
+            </AlertDescription>
           </Alert>
         ) : null}
 

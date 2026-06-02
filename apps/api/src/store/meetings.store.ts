@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto"
 import { PostgresService } from "../db/postgres.service"
 import { RedisQueueService } from "../redis/redis.service"
 import {
+  createS3HeadObjectPresignedUrl,
   createS3PutObjectPresignedUrl,
 } from "../s3/s3-presign"
 
@@ -101,6 +102,12 @@ export interface MeetingArtifactRecord {
   updatedAt: string
 }
 
+export interface MeetingProcessingMetrics {
+  actualSeconds: number | null
+  estimatedSeconds: number | null
+  estimationSampleSize: number
+}
+
 export interface MeetingRecord {
   id: string
   title: string
@@ -112,6 +119,7 @@ export interface MeetingRecord {
   processingStartedAt: string | null
   processingFinishedAt: string | null
   errorText: string | null
+  processingMetrics: MeetingProcessingMetrics
   createdAt: string
   updatedAt: string
 }
@@ -149,6 +157,8 @@ function parseJson<T>(value: unknown, fallback: T): T {
 }
 
 function mapMeetingRow(row: Record<string, unknown>): MeetingRecord {
+  const processingStartedAt = (row.processing_started_at as string | null) ?? null
+  const processingFinishedAt = (row.processing_finished_at as string | null) ?? null
   return {
     id: String(row.id),
     title: String(row.title),
@@ -158,9 +168,14 @@ function mapMeetingRow(row: Record<string, unknown>): MeetingRecord {
     durationSeconds:
       row.duration_seconds == null ? null : Number(row.duration_seconds),
     speakersCount: Number(row.speakers_count ?? 0),
-    processingStartedAt: (row.processing_started_at as string | null) ?? null,
-    processingFinishedAt: (row.processing_finished_at as string | null) ?? null,
+    processingStartedAt,
+    processingFinishedAt,
     errorText: (row.error_text as string | null) ?? null,
+    processingMetrics: {
+      actualSeconds: processingDurationSeconds(processingStartedAt, processingFinishedAt),
+      estimatedSeconds: null,
+      estimationSampleSize: 0,
+    },
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   }
@@ -242,6 +257,30 @@ function timeOf(value: string | null | undefined) {
   }
   const time = new Date(value).getTime()
   return Number.isFinite(time) ? time : 0
+}
+
+function processingDurationSeconds(
+  startedAt: string | null | undefined,
+  finishedAt: string | null | undefined
+) {
+  const started = timeOf(startedAt)
+  const finished = timeOf(finishedAt)
+  if (started === 0 || finished === 0 || finished <= started) {
+    return null
+  }
+  return Math.round((finished - started) / 1000)
+}
+
+function median(values: number[]) {
+  if (values.length === 0) {
+    return null
+  }
+  const sorted = [...values].sort((left, right) => left - right)
+  const middle = Math.floor(sorted.length / 2)
+  if (sorted.length % 2 === 0) {
+    return (sorted[middle - 1] + sorted[middle]) / 2
+  }
+  return sorted[middle]
 }
 
 function artifactForStage(
@@ -445,9 +484,16 @@ export class MeetingsStore {
       const meetingId = String(row.id)
       await this.reconcileStaleMeetingJobs(meetingId)
       const freshMeeting = await this.getMeetingSummary(meetingId)
+      const sourceFile = await this.getSourceFile(meetingId)
+      const processingEstimate = await this.buildProcessingEstimate(sourceFile, meetingId)
       items.push({
         ...freshMeeting,
-        sourceFile: await this.getSourceFile(meetingId),
+        sourceFile,
+        processingMetrics: {
+          ...freshMeeting.processingMetrics,
+          estimatedSeconds: processingEstimate.estimatedSeconds,
+          estimationSampleSize: processingEstimate.estimationSampleSize,
+        },
       })
     }
 
@@ -463,6 +509,8 @@ export class MeetingsStore {
 
   async getMeeting(id: string) {
     await this.reconcileStaleMeetingJobs(id)
+    await this.reconcilePendingMeetingUpload(id)
+    await this.autoStartReadyMeeting(id)
     let meeting = await this.getMeetingSummary(id)
     const [sourceFile, speakers, jobs, artifacts] = await Promise.all([
       this.getSourceFile(id),
@@ -470,6 +518,7 @@ export class MeetingsStore {
       this.listJobs(id),
       this.listArtifacts(id),
     ])
+    const processingEstimate = await this.buildProcessingEstimate(sourceFile, id)
 
     if (shouldMarkMeetingCompleted({ meeting, sourceFile, jobs, artifacts })) {
       await this.db.query(
@@ -486,6 +535,15 @@ export class MeetingsStore {
         ...meeting,
         status: "completed",
         processingFinishedAt: meeting.processingFinishedAt ?? nowIso(),
+        processingMetrics: {
+          ...meeting.processingMetrics,
+          actualSeconds:
+            meeting.processingMetrics.actualSeconds ??
+            processingDurationSeconds(
+              meeting.processingStartedAt,
+              meeting.processingFinishedAt ?? nowIso()
+            ),
+        },
         updatedAt: nowIso(),
       }
     }
@@ -503,6 +561,11 @@ export class MeetingsStore {
 
     return {
       ...meeting,
+      processingMetrics: {
+        ...meeting.processingMetrics,
+        estimatedSeconds: processingEstimate.estimatedSeconds,
+        estimationSampleSize: processingEstimate.estimationSampleSize,
+      },
       sourceFile,
       speakers,
       segments: rawSegments.rows.map((row) => mapSegmentRow(row, speakersById)),
@@ -748,7 +811,12 @@ export class MeetingsStore {
 
   async startMeeting(id: string) {
     const meeting = await this.getMeetingSummary(id)
-    const sourceFile = await this.getRequiredSourceFile(id)
+    let sourceFile = await this.getRequiredSourceFile(id)
+
+    if (sourceFile.uploadStatus !== "completed") {
+      await this.reconcilePendingMeetingUpload(id)
+      sourceFile = await this.getRequiredSourceFile(id)
+    }
 
     if (sourceFile.uploadStatus !== "completed") {
       throw new BadRequestException("Файл встречи ещё не загружен полностью")
@@ -1164,6 +1232,294 @@ export class MeetingsStore {
         [meetingId, `${staleErrorText} Затронутые этапы: ${staleJobStages}.`]
       )
     })
+  }
+
+  private async reconcilePendingMeetingUpload(meetingId: string) {
+    const sourceFile = await this.getSourceFile(meetingId)
+    if (!sourceFile || sourceFile.uploadStatus === "completed" || sourceFile.uploadStatus === "aborted") {
+      return
+    }
+
+    const sessionResult = await this.db.query<Record<string, unknown>>(
+      `
+      select *
+      from meeting_upload_sessions
+      where meeting_id = $1 and status in ('initiated', 'uploading')
+      order by created_at desc
+      limit 1
+      `,
+      [meetingId]
+    )
+    const session = sessionResult.rows[0]
+    if (!session) {
+      return
+    }
+
+    const bucket = String(session.bucket ?? "")
+    const storageKey = String(session.storage_key ?? "")
+    if (!bucket || !storageKey) {
+      return
+    }
+
+    const objectExists = await this.checkS3ObjectExists(bucket, storageKey)
+    if (!objectExists) {
+      return
+    }
+
+    await this.db.transaction(async (client) => {
+      await client.query(
+        `
+        update meeting_upload_sessions
+        set status = 'completed',
+            completed_at = coalesce(completed_at, now())
+        where id = $1
+        `,
+        [String(session.id)]
+      )
+      await client.query(
+        `
+        update meeting_source_files
+        set upload_status = 'completed',
+            processing_status = case
+              when processing_status = 'processing' then processing_status
+              else 'pending'
+            end
+        where id = $1
+        `,
+        [String(session.source_file_id)]
+      )
+      await client.query(
+        `
+        update meetings
+        set status = case
+              when status = 'draft' then 'uploaded'
+              when status = 'uploaded' then 'uploaded'
+              else status
+            end,
+            error_text = case
+              when status in ('draft', 'uploaded') then null
+              else error_text
+            end,
+            updated_at = now()
+        where id = $1
+        `,
+        [meetingId]
+      )
+    })
+  }
+
+  private async autoStartReadyMeeting(meetingId: string) {
+    const created = await this.db.transaction(async (client) => {
+      const meetingResult = await client.query<Record<string, unknown>>(
+        `select * from meetings where id = $1 for update`,
+        [meetingId]
+      )
+      const meetingRow = meetingResult.rows[0]
+      if (!meetingRow || String(meetingRow.status) !== "uploaded") {
+        return null
+      }
+
+      const sourceFileResult = await client.query<Record<string, unknown>>(
+        `
+        select *
+        from meeting_source_files
+        where meeting_id = $1
+        limit 1
+        `,
+        [meetingId]
+      )
+      const sourceFileRow = sourceFileResult.rows[0]
+      if (!sourceFileRow || String(sourceFileRow.upload_status) !== "completed") {
+        return null
+      }
+
+      const jobsResult = await client.query<{ count: string }>(
+        `
+        select count(*)::text as count
+        from meeting_jobs
+        where meeting_id = $1
+        `,
+        [meetingId]
+      )
+      if (Number(jobsResult.rows[0]?.count ?? 0) > 0) {
+        return null
+      }
+
+      const createdResult = await client.query<Record<string, unknown>>(
+        `
+        insert into meeting_jobs (
+          id, meeting_id, stage, status, payload_json, result_json, error_text, started_at, processing_heartbeat_at, finished_at, created_at
+        ) values (
+          $1, $2, 'audio_prepared', 'queued', $3::jsonb, null, null, null, null, null, now()
+        )
+        returning *
+        `,
+        [
+          randomUUID(),
+          meetingId,
+          JSON.stringify({
+            stage: "audio_prepared",
+            trigger: "start",
+          }),
+        ]
+      )
+
+      await client.query(
+        `
+        update meetings
+        set
+          status = 'processing',
+          processing_started_at = coalesce(processing_started_at, now()),
+          processing_finished_at = null,
+          error_text = null,
+          updated_at = now()
+        where id = $1
+        `,
+        [meetingId]
+      )
+
+      return mapJobRow(createdResult.rows[0] ?? {})
+    })
+
+    if (!created) {
+      return
+    }
+
+    await this.queue.enqueueMeetingJob({
+      jobId: created.id,
+      meetingId,
+      stage: created.stage,
+      trigger: "start",
+    })
+  }
+
+  private async buildProcessingEstimate(
+    sourceFile: MeetingSourceFileRecord | null,
+    excludeMeetingId?: string
+  ) {
+    if (!sourceFile || sourceFile.sizeBytes <= 0) {
+      return {
+        estimatedSeconds: null,
+        estimationSampleSize: 0,
+      }
+    }
+
+    const result = await this.db.query<Record<string, unknown>>(
+      `
+      select
+        m.id,
+        m.processing_started_at,
+        m.processing_finished_at,
+        msf.size_bytes,
+        msf.mime_type,
+        msf.duration_seconds
+      from meetings m
+      join meeting_source_files msf on msf.meeting_id = m.id
+      where m.status = 'completed'
+        and m.processing_started_at is not null
+        and m.processing_finished_at is not null
+        and msf.upload_status = 'completed'
+        and msf.size_bytes > 0
+        and coalesce(msf.duration_seconds, 0) > 0
+        and ($1::text is null or m.id <> $1)
+      order by m.processing_finished_at desc
+      limit 40
+      `,
+      [excludeMeetingId ?? null]
+    )
+
+    const samples = result.rows
+      .map((row) => {
+        const actualSeconds = processingDurationSeconds(
+          (row.processing_started_at as string | null) ?? null,
+          (row.processing_finished_at as string | null) ?? null
+        )
+        const sizeBytes = Number(row.size_bytes ?? 0)
+        return {
+          sizeBytes,
+          actualSeconds,
+          mimeFamily: String(row.mime_type ?? "").split("/")[0] ?? "",
+          durationSeconds: Number(row.duration_seconds ?? 0),
+        }
+      })
+      .filter(
+        (item) =>
+          item.actualSeconds != null &&
+          Number.isFinite(item.actualSeconds) &&
+          item.actualSeconds > 0 &&
+          Number.isFinite(item.durationSeconds) &&
+          item.durationSeconds > 0 &&
+          Number.isFinite(item.sizeBytes) &&
+          item.sizeBytes > 0
+      )
+
+    if (samples.length === 0) {
+      return {
+        estimatedSeconds: null,
+        estimationSampleSize: 0,
+      }
+    }
+
+    const currentMimeFamily = sourceFile.mimeType.split("/")[0] ?? ""
+    const comparablePool =
+      currentMimeFamily.length > 0
+        ? samples.filter((item) => item.mimeFamily === currentMimeFamily)
+        : []
+    const fallbackPool = comparablePool.length >= 3 ? comparablePool : samples
+    const nearestSamples = [...fallbackPool]
+      .sort(
+        (left, right) =>
+          Math.abs(left.sizeBytes - sourceFile.sizeBytes) -
+          Math.abs(right.sizeBytes - sourceFile.sizeBytes)
+      )
+      .slice(0, Math.min(fallbackPool.length, 7))
+
+    const ratio = median(
+      nearestSamples.map((item) => Number(item.actualSeconds) / item.sizeBytes)
+    )
+    if (ratio == null || !Number.isFinite(ratio) || ratio <= 0) {
+      return {
+        estimatedSeconds: null,
+        estimationSampleSize: nearestSamples.length,
+      }
+    }
+
+    return {
+      estimatedSeconds: Math.max(30, Math.round(ratio * sourceFile.sizeBytes)),
+      estimationSampleSize: nearestSamples.length,
+    }
+  }
+
+  private async checkS3ObjectExists(bucket: string, key: string) {
+    const endpoint = process.env.S3_ENDPOINT ?? DEFAULT_S3_ENDPOINT
+    const region = process.env.S3_REGION ?? DEFAULT_S3_REGION
+    const accessKeyId = process.env.S3_ACCESS_KEY_ID
+    const secretAccessKey = process.env.S3_SECRET_ACCESS_KEY
+    const sessionToken = process.env.S3_SESSION_TOKEN
+
+    if (!accessKeyId || !secretAccessKey) {
+      throw new InternalServerErrorException("S3 credentials are not configured")
+    }
+
+    const signedUrl = createS3HeadObjectPresignedUrl({
+      endpoint,
+      region,
+      accessKeyId,
+      secretAccessKey,
+      sessionToken,
+      bucket,
+      key,
+    })
+
+    try {
+      const response = await fetch(signedUrl, {
+        method: "HEAD",
+        cache: "no-store",
+      })
+      return response.ok
+    } catch {
+      return false
+    }
   }
 
   private async getSourceFile(meetingId: string) {

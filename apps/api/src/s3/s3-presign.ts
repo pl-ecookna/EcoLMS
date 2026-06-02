@@ -26,6 +26,18 @@ export interface S3PresignPutObjectInput {
   now?: Date
 }
 
+export interface S3PresignHeadObjectInput {
+  endpoint: string
+  region: string
+  accessKeyId: string
+  secretAccessKey: string
+  sessionToken?: string
+  bucket: string
+  key: string
+  expiresInSeconds?: number
+  now?: Date
+}
+
 function encodeRfc3986(value: string) {
   return encodeURIComponent(value).replace(/[!'()*]/g, (char) =>
     `%${char.charCodeAt(0).toString(16).toUpperCase()}`
@@ -87,7 +99,8 @@ function buildSigningKey(secretAccessKey: string, dateStamp: string, region: str
 }
 
 function createPresignedUrl(
-  input: S3PresignPartInput | S3PresignPutObjectInput,
+  method: "HEAD" | "PUT",
+  input: S3PresignPartInput | S3PresignPutObjectInput | S3PresignHeadObjectInput,
   queryExtras: Record<string, string>
 ) {
   const expiresInSeconds = input.expiresInSeconds ?? 15 * 60
@@ -122,7 +135,7 @@ function createPresignedUrl(
   const payloadHash = "UNSIGNED-PAYLOAD"
 
   const canonicalRequest = [
-    "PUT",
+    method,
     canonicalUri,
     canonicalQueryString,
     canonicalHeaders,
@@ -147,12 +160,16 @@ function createPresignedUrl(
 }
 
 export function createS3UploadPartPresignedUrl(input: S3PresignPartInput) {
-  return createPresignedUrl(input, {
+  return createPresignedUrl("PUT", input, {
     partNumber: String(input.partNumber),
     uploadId: input.uploadId,
   })
 }
 
 export function createS3PutObjectPresignedUrl(input: S3PresignPutObjectInput) {
-  return createPresignedUrl(input, {})
+  return createPresignedUrl("PUT", input, {})
+}
+
+export function createS3HeadObjectPresignedUrl(input: S3PresignHeadObjectInput) {
+  return createPresignedUrl("HEAD", input, {})
 }

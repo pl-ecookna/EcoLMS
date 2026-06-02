@@ -1,6 +1,9 @@
 # Changelog
 
 ## 2026-06-02
+- Added meeting processing timing metrics and size-based ETA forecasting: completed meetings now expose actual end-to-end processing time, active runs show an estimate derived from nearby historical files, and meeting-start notifications include the expected processing window.
+- Recovered a stuck `meetings` upload where the file had already landed in S3 but the upload session never reached `complete`; backend now reconciles such sessions on meeting open/start and auto-enqueues `audio_prepared` when the file is present and `meeting_jobs` are still empty.
+- Fixed misleading `meetings` progress UI: `uploaded` records without confirmed pipeline start no longer look like an active 15% processing job and instead show a waiting-for-confirmation state.
 - Replaced the top-right user badge with an avatar trigger menu; `Prompts` and `Logout` now live inside the dropdown across LMS, meetings, and prompt editor headers.
 - Replaced `Link`-based logout actions with plain anchor navigation so App Router prefetch cannot trigger `/api/auth/logout` in the background and drop the session on refresh.
 - Forced full-page navigation from LMS dashboard to `/meetings` and disabled prefetch for that entrypoint to avoid stale auth-sensitive App Router cache sending users back to the start screen.

@@ -304,6 +304,12 @@ export interface MeetingArtifactRecord {
   updatedAt: string
 }
 
+export interface MeetingProcessingMetrics {
+  actualSeconds: number | null
+  estimatedSeconds: number | null
+  estimationSampleSize: number
+}
+
 export interface MeetingRecord {
   id: string
   title: string
@@ -315,6 +321,7 @@ export interface MeetingRecord {
   processingStartedAt: string | null
   processingFinishedAt: string | null
   errorText: string | null
+  processingMetrics: MeetingProcessingMetrics
   createdAt: string
   updatedAt: string
 }
