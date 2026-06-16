@@ -8,10 +8,13 @@ import { randomUUID } from "node:crypto"
 
 import { PostgresService } from "../db/postgres.service"
 import { RedisQueueService } from "../redis/redis.service"
+import { createS3UploadPartPresignedUrl } from "../s3/s3-presign"
 import {
-  createS3PutObjectPresignedUrl,
-  createS3UploadPartPresignedUrl,
-} from "../s3/s3-presign"
+  abortMultipartUpload,
+  completeMultipartUpload,
+  createMultipartUpload,
+  type CompletedPart,
+} from "../s3/s3-multipart"
 
 const DEFAULT_S3_ENDPOINT = "https://s3.ru1.storage.beget.cloud"
 const DEFAULT_S3_BUCKET = "1bf1b61c108f-ecolms"
@@ -875,6 +878,19 @@ export class EcolmsStore {
       throw new BadRequestException("Превышен лимит размера файла")
     }
 
+    const sourceFileId = randomUUID()
+    const storageKey = `source/${projectId}/${sourceFileId}/${input.fileName}`
+
+    let s3UploadId: string
+    try {
+      const result = await createMultipartUpload(storageKey, input.mimeType)
+      s3UploadId = result.uploadId
+    } catch (error) {
+      throw new InternalServerErrorException(
+        `Не удалось инициировать загрузку в S3: ${error instanceof Error ? error.message : String(error)}`
+      )
+    }
+
     return this.db.transaction(async (client) => {
       const projectResult = await client.query<Record<string, unknown>>(
         `select * from projects where id = $1 for update`,
@@ -896,11 +912,8 @@ export class EcolmsStore {
         throw new BadRequestException("Превышен лимит файлов в проекте")
       }
 
-      const sourceFileId = randomUUID()
       const uploadId = randomUUID()
-      const storageKey = `source/${projectId}/${sourceFileId}/${input.fileName}`
       const bucket = process.env.S3_BUCKET ?? DEFAULT_S3_BUCKET
-      const s3UploadId = randomUUID()
 
       await client.query(
         `
@@ -967,8 +980,8 @@ export class EcolmsStore {
         sourceFileId,
         bucket,
         storageKey,
-        partSize: Math.max(input.fileSize, 1),
-        maxParts: 1,
+        partSize: 0,
+        maxParts: Math.ceil(input.fileSize / (10 * 1024 * 1024)) || 1,
         uploadStatus: "initiated" as const,
       }
     })
@@ -990,7 +1003,7 @@ export class EcolmsStore {
     return {
       uploadId,
       partNumber,
-      signedUrl: createS3PutObjectPresignedUrl({
+      signedUrl: createS3UploadPartPresignedUrl({
         endpoint,
         region,
         accessKeyId,
@@ -998,14 +1011,24 @@ export class EcolmsStore {
         sessionToken,
         bucket: session.bucket,
         key: session.storageKey,
+        uploadId: session.s3UploadId,
+        partNumber,
       }),
       method: "PUT",
       headers: {},
     }
   }
 
-  async completeUpload(uploadId: string) {
+  async completeUpload(uploadId: string, parts: CompletedPart[]) {
     const session = await this.getUploadSession(uploadId)
+
+    try {
+      await completeMultipartUpload(session.storageKey, session.s3UploadId, parts)
+    } catch (error) {
+      throw new InternalServerErrorException(
+        `Не удалось завершить загрузку в S3: ${error instanceof Error ? error.message : String(error)}`
+      )
+    }
 
     await this.db.transaction(async (client) => {
       await client.query(`update upload_sessions set status = 'completed', completed_at = now() where id = $1`, [
@@ -1044,6 +1067,9 @@ export class EcolmsStore {
 
   async abortUpload(uploadId: string) {
     const session = await this.getUploadSession(uploadId)
+
+    await abortMultipartUpload(session.storageKey, session.s3UploadId)
+
     await this.db.transaction(async (client) => {
       await client.query(`update upload_sessions set status = 'aborted' where id = $1`, [uploadId])
       await client.query(`update source_files set upload_status = 'aborted' where id = $1`, [

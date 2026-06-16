@@ -120,10 +120,16 @@ export class MeetingsController {
   }
 
   @Post("meeting-uploads/:uploadId/complete")
-  async completeUpload(@Param("uploadId") uploadId: string) {
+  async completeUpload(
+    @Param("uploadId") uploadId: string,
+    @Body()
+    body: {
+      parts: Array<{ partNumber: number; etag: string }>
+    }
+  ) {
     return {
       success: true,
-      data: await this.store.completeUpload(uploadId),
+      data: await this.store.completeUpload(uploadId, body.parts ?? []),
       error: null,
     }
   }

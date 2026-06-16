@@ -8,10 +8,13 @@ import { randomUUID } from "node:crypto"
 
 import { PostgresService } from "../db/postgres.service"
 import { RedisQueueService } from "../redis/redis.service"
+import { createS3HeadObjectPresignedUrl, createS3UploadPartPresignedUrl } from "../s3/s3-presign"
 import {
-  createS3HeadObjectPresignedUrl,
-  createS3PutObjectPresignedUrl,
-} from "../s3/s3-presign"
+  abortMultipartUpload,
+  completeMultipartUpload,
+  createMultipartUpload,
+  type CompletedPart,
+} from "../s3/s3-multipart"
 
 const DEFAULT_S3_ENDPOINT = "https://s3.ru1.storage.beget.cloud"
 const DEFAULT_S3_BUCKET = "1bf1b61c108f-ecolms"
@@ -619,6 +622,19 @@ export class MeetingsStore {
       throw new BadRequestException("Превышен лимит размера файла")
     }
 
+    const sourceFileId = randomUUID()
+    const storageKey = `meetings/${meetingId}/source/${sourceFileId}/${input.fileName}`
+
+    let s3UploadId: string
+    try {
+      const result = await createMultipartUpload(storageKey, input.mimeType)
+      s3UploadId = result.uploadId
+    } catch (error) {
+      throw new InternalServerErrorException(
+        `Не удалось инициировать загрузку в S3: ${error instanceof Error ? error.message : String(error)}`
+      )
+    }
+
     return this.db.transaction(async (client) => {
       const meetingResult = await client.query<Record<string, unknown>>(
         `select * from meetings where id = $1 for update`,
@@ -640,11 +656,8 @@ export class MeetingsStore {
         throw new BadRequestException("Для встречи уже загружен файл")
       }
 
-      const sourceFileId = randomUUID()
       const uploadId = randomUUID()
       const bucket = process.env.S3_BUCKET ?? DEFAULT_S3_BUCKET
-      const storageKey = `meetings/${meetingId}/source/${sourceFileId}/${input.fileName}`
-      const s3UploadId = randomUUID()
 
       await client.query(
         `
@@ -653,7 +666,7 @@ export class MeetingsStore {
         ) values (
           $1, $2, $3, $4, $5, $6, 'initiated', 'pending', null, null, null, now()
         )
-        `,
+      `,
         [
           sourceFileId,
           meetingId,
@@ -671,7 +684,7 @@ export class MeetingsStore {
         ) values (
           $1, $2, $3, $4, 'initiated', now(), null, $5, $6, $7, $8, $9
         )
-        `,
+      `,
         [
           uploadId,
           meetingId,
@@ -700,8 +713,8 @@ export class MeetingsStore {
         sourceFileId,
         bucket,
         storageKey,
-        partSize: Math.max(input.fileSize, 1),
-        maxParts: 1,
+        partSize: 0,
+        maxParts: Math.ceil(input.fileSize / (5 * 1024 * 1024)) || 1,
         uploadStatus: "initiated" as const,
       }
     })
@@ -727,7 +740,7 @@ export class MeetingsStore {
     return {
       uploadId,
       partNumber,
-      signedUrl: createS3PutObjectPresignedUrl({
+      signedUrl: createS3UploadPartPresignedUrl({
         endpoint,
         region,
         accessKeyId,
@@ -735,14 +748,25 @@ export class MeetingsStore {
         sessionToken,
         bucket: session.bucket,
         key: session.storageKey,
+        uploadId: session.s3UploadId,
+        partNumber,
       }),
       method: "PUT",
       headers: {},
     }
   }
 
-  async completeUpload(uploadId: string) {
+  async completeUpload(uploadId: string, parts: CompletedPart[]) {
     const session = await this.getUploadSession(uploadId)
+
+    try {
+      await completeMultipartUpload(session.storageKey, session.s3UploadId, parts)
+    } catch (error) {
+      throw new InternalServerErrorException(
+        `Не удалось завершить загрузку в S3: ${error instanceof Error ? error.message : String(error)}`
+      )
+    }
+
     await this.db.transaction(async (client) => {
       await client.query(
         `
@@ -780,6 +804,9 @@ export class MeetingsStore {
 
   async abortUpload(uploadId: string) {
     const session = await this.getUploadSession(uploadId)
+
+    await abortMultipartUpload(session.storageKey, session.s3UploadId)
+
     await this.db.transaction(async (client) => {
       await client.query(
         `update meeting_upload_sessions set status = 'aborted' where id = $1`,
@@ -1575,6 +1602,7 @@ export class MeetingsStore {
       id: String(row.id),
       meetingId: String(row.meeting_id),
       sourceFileId: String(row.source_file_id),
+      s3UploadId: String(row.s3_upload_id),
       bucket: String(row.bucket),
       storageKey: String(row.storage_key),
       originalName: String(row.original_name),

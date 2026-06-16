@@ -173,3 +173,80 @@ export function createS3PutObjectPresignedUrl(input: S3PresignPutObjectInput) {
 export function createS3HeadObjectPresignedUrl(input: S3PresignHeadObjectInput) {
   return createPresignedUrl("HEAD", input, {})
 }
+
+export interface S3SignRequestInput {
+  method: "POST" | "DELETE"
+  endpoint: string
+  region: string
+  accessKeyId: string
+  secretAccessKey: string
+  sessionToken?: string
+  bucket: string
+  key: string
+  query?: Record<string, string>
+  body?: string
+  now?: Date
+}
+
+export function signS3Request(input: S3SignRequestInput): {
+  url: string
+  headers: Record<string, string>
+} {
+  const now = input.now ?? new Date()
+  const { amzDate, dateStamp } = toAmzDate(now)
+  const endpointUrl = new URL(input.endpoint)
+  const canonicalUri = `/${encodePathSegment(input.bucket)}/${input.key
+    .split("/")
+    .map(encodePathSegment)
+    .join("/")}`
+
+  const payloadHash = hashSha256(input.body ?? "")
+  const signedHeaders = "host"
+  const canonicalHeaders = `host:${endpointUrl.host}\n`
+
+  const allQueryParams: Record<string, string> = {
+    "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+    "X-Amz-Credential": `${input.accessKeyId}/${dateStamp}/${input.region}/s3/aws4_request`,
+    "X-Amz-Date": amzDate,
+    "X-Amz-Expires": "600",
+    "X-Amz-SignedHeaders": signedHeaders,
+  }
+
+  if (input.sessionToken) {
+    allQueryParams["X-Amz-Security-Token"] = input.sessionToken
+  }
+
+  if (input.query) {
+    for (const [k, v] of Object.entries(input.query)) {
+      allQueryParams[k] = v
+    }
+  }
+
+  const canonicalQueryString = canonicalQuery(allQueryParams)
+
+  const canonicalRequest = [
+    input.method,
+    canonicalUri,
+    canonicalQueryString,
+    canonicalHeaders,
+    signedHeaders,
+    payloadHash,
+  ].join("\n")
+
+  const credentialScope = `${dateStamp}/${input.region}/s3/aws4_request`
+  const stringToSign = [
+    "AWS4-HMAC-SHA256",
+    amzDate,
+    credentialScope,
+    hashSha256(canonicalRequest),
+  ].join("\n")
+
+  const signingKey = buildSigningKey(input.secretAccessKey, dateStamp, input.region)
+  const signature = createHmac("sha256", signingKey).update(stringToSign, "utf8").digest("hex")
+
+  const signedQuery = canonicalQuery(allQueryParams) + `&X-Amz-Signature=${signature}`
+  return {
+    url: `${endpointUrl.origin}${canonicalUri}?${signedQuery}`,
+    headers: input.body !== undefined ? { "Content-Type": "application/xml" } : {},
+  }
+}

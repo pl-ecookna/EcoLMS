@@ -500,9 +500,13 @@ export async function signUploadPart(uploadId: string, partNumber: number) {
   })
 }
 
-export async function completeUpload(uploadId: string) {
+export async function completeUpload(
+  uploadId: string,
+  parts: Array<{ partNumber: number; etag: string }>
+) {
   return requestJson<CompletedUpload>(`/api/uploads/${uploadId}/complete`, {
     method: "POST",
+    body: JSON.stringify({ parts }),
   })
 }
 
@@ -592,9 +596,13 @@ export async function signMeetingUploadPart(uploadId: string, partNumber: number
   })
 }
 
-export async function completeMeetingUpload(uploadId: string) {
+export async function completeMeetingUpload(
+  uploadId: string,
+  parts: Array<{ partNumber: number; etag: string }>
+) {
   return requestJson<CompletedUpload>(`/api/meeting-uploads/${uploadId}/complete`, {
     method: "POST",
+    body: JSON.stringify({ parts }),
   })
 }
 

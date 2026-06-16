@@ -728,6 +728,7 @@ export function EcolmsDashboard({
         const totalParts = Math.max(1, Math.ceil(file.size / partSize))
 
         try {
+          const uploadedParts: Array<{ partNumber: number; etag: string }> = []
           for (let partNumber = 1; partNumber <= totalParts; partNumber += 1) {
             const start = (partNumber - 1) * partSize
             const end = Math.min(file.size, partNumber * partSize)
@@ -745,11 +746,14 @@ export function EcolmsDashboard({
               throw new Error(`Не удалось загрузить часть ${partNumber} файла ${file.name}`)
             }
 
+            const etag = response.headers.get("etag") ?? response.headers.get("ETag") ?? ""
+            uploadedParts.push({ partNumber, etag })
+
             completedChunks += 1
             setUploadProgress(Math.round((completedChunks / totalChunks) * 100))
           }
 
-          await completeUpload(init.uploadId)
+          await completeUpload(init.uploadId, uploadedParts)
         } catch (error) {
           await abortUpload(init.uploadId).catch(() => undefined)
           throw error
