@@ -609,10 +609,6 @@ function buildTranscriptMarkdown(meeting: MeetingDetailRecord) {
   return `${lines.join("\n").trim()}\n`
 }
 
-function buildMeetingInfoUrl(meetingId: string, currentPage: number) {
-  return `/meetings?page=${currentPage}&meeting=${meetingId}&info=1`
-}
-
 function MeetingInfoSheet({
   meeting,
   open,
@@ -1689,20 +1685,6 @@ export function MeetingsWorkspaceView({
                                   <MoreHorizontalIcon className="size-4" />
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent align="end" className="min-w-56">
-                                  <DropdownMenuItem
-                                    onClick={() =>
-                                      router.push(buildMeetingInfoUrl(meeting.id, currentPage))
-                                    }
-                                    className="items-start gap-3 py-2"
-                                  >
-                                    <InfoIcon className="mt-0.5 size-4" />
-                                    <div className="space-y-0.5">
-                                      <div className="font-medium">Информация</div>
-                                      <div className="text-xs text-muted-foreground">
-                                        Открыть технические детали и историю обработки.
-                                      </div>
-                                    </div>
-                                  </DropdownMenuItem>
                                   {canManage ? (
                                     <DropdownMenuItem
                                       variant="destructive"
