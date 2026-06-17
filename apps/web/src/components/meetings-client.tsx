@@ -1056,7 +1056,7 @@ const MEETING_FILE_ACCEPT =
   "audio/*,video/*,.webm,.mp4,.mov,.m4a,.mp3,.wav,.ogg,.opus"
 const DEFAULT_MEETING_PART_SIZE_BYTES = 5 * 1024 * 1024
 
-type UiAlertType = "success" | "error" | "info"
+type UiAlertType = "success" | "error" | "info" | "warning"
 
 type UiAlert = {
   id: string
@@ -1485,18 +1485,33 @@ export function MeetingsWorkspaceView({
       })
 
       await uploadMeetingFile(created.id, meetingFile)
-      setCreateMessage("Запускаем обработку")
-      const started = await startMeeting(created.id)
-      const expectedProcessingTime = meetingProcessingEstimateText(started.meeting)
-      setCreatePhase("done")
-      setCreateMessage("Запись добавлена и отправлена в обработку")
-      notify(
-        "success",
-        "Запись добавлена",
-        expectedProcessingTime
-          ? `Встреча создана и отправлена в обработку. Ожидаемое время: ${expectedProcessingTime}.`
-          : "Встреча создана и отправлена в обработку."
-      )
+
+      let startWarning: string | null = null
+      try {
+        setCreateMessage("Запускаем обработку")
+        const started = await startMeeting(created.id)
+        const expectedProcessingTime = meetingProcessingEstimateText(started.meeting)
+        setCreatePhase("done")
+        setCreateMessage("Запись добавлена и отправлена в обработку")
+        notify(
+          "success",
+          "Запись добавлена",
+          expectedProcessingTime
+            ? `Встреча создана и отправлена в обработку. Ожидаемое время: ${expectedProcessingTime}.`
+            : "Встреча создана и отправлена в обработку."
+        )
+      } catch (startError) {
+        startWarning =
+          startError instanceof Error ? startError.message : "Не удалось запустить обработку"
+        setCreatePhase("done")
+        setCreateMessage("Запись добавлена. Обработка будет доступна позже.")
+        notify(
+          "warning",
+          "Запись добавлена",
+          `${startWarning}. Файл загружен, вы можете запустить обработку вручную позже.`
+        )
+      }
+
       setCreateOpen(false)
       resetCreateMeetingForm()
       setSelectedMeetingState(null)
@@ -2017,7 +2032,8 @@ export function MeetingsWorkspaceView({
             variant={item.type === "error" ? "destructive" : "default"}
             className={cn(
               "pointer-events-auto relative w-full pr-10 shadow-lg",
-              item.type === "success" ? "border-emerald-300 bg-emerald-50 text-emerald-900" : ""
+              item.type === "success" ? "border-emerald-300 bg-emerald-50 text-emerald-900" : "",
+              item.type === "warning" ? "border-amber-300 bg-amber-50 text-amber-900" : ""
             )}
           >
             <AlertTitle>{item.title}</AlertTitle>
