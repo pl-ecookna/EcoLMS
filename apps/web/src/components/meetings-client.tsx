@@ -1467,6 +1467,8 @@ export function MeetingsWorkspaceView({
     setCreatePhase("uploading")
     setCreateProgress(0)
 
+    let createdId: string | null = null
+
     try {
       const health = await refreshHealth()
       const blockers = getMeetingHealthBlockers(health)
@@ -1483,6 +1485,7 @@ export function MeetingsWorkspaceView({
         title: trimmedTitle,
         description: meetingDescription.trim(),
       })
+      createdId = created.id
 
       await uploadMeetingFile(created.id, meetingFile)
 
@@ -1517,6 +1520,9 @@ export function MeetingsWorkspaceView({
       setSelectedMeetingState(null)
       router.push(`/meetings?page=1&meeting=${created.id}`)
     } catch (error) {
+      if (createdId) {
+        await deleteMeeting(createdId).catch(() => undefined)
+      }
       const message =
         error instanceof Error ? error.message : "Не удалось добавить запись встречи"
       setCreatePhase("error")
@@ -2081,6 +2087,7 @@ export function MeetingDetailView({
   const [markdownDraft, setMarkdownDraft] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [infoMessage, setInfoMessage] = useState<string | null>(null)
+  const [isStartingProcessing, setIsStartingProcessing] = useState(false)
 
   useEffect(() => {
     setLiveMeeting(initialMeeting)
@@ -2114,6 +2121,10 @@ export function MeetingDetailView({
   const transcriptMarkdown = useMemo(() => buildTranscriptMarkdown(meeting), [meeting])
   const isMeetingProcessing = hasLiveMeetingPipeline(meeting)
   const isUploadPending = isMeetingUploadPending(meeting)
+  const canStartProcessing =
+    meeting.status === "uploaded" &&
+    meeting.sourceFile?.uploadStatus === "completed" &&
+    !isMeetingProcessing
   const hasMarkdownArtifacts =
     Boolean(getArtifact(meeting, "meeting_summary")?.contentMd?.trim()) ||
     Boolean(getArtifact(meeting, "meeting_protocol")?.contentMd?.trim()) ||
@@ -2186,6 +2197,22 @@ export function MeetingDetailView({
       }),
     [meeting.speakers, speakerDrafts]
   )
+
+  const handleStartProcessing = async () => {
+    setIsStartingProcessing(true)
+    setError(null)
+    try {
+      const result = await startMeeting(meetingId)
+      setLiveMeeting(result.meeting)
+      setInfoMessage("Обработка запущена. Результаты появятся автоматически.")
+    } catch (startError) {
+      const message =
+        startError instanceof Error ? startError.message : "Не удалось запустить обработку"
+      setError(message)
+    } finally {
+      setIsStartingProcessing(false)
+    }
+  }
 
   const handleCopyMarkdown = async () => {
     await navigator.clipboard.writeText(markdownDraft)
@@ -2281,6 +2308,20 @@ export function MeetingDetailView({
               <ArrowLeftIcon data-icon="inline-start" />
               К списку
             </Button>
+            {canStartProcessing ? (
+              <Button
+                size="sm"
+                onClick={() => void handleStartProcessing()}
+                disabled={isStartingProcessing}
+              >
+                {isStartingProcessing ? (
+                  <Loader2Icon data-icon="inline-start" className="animate-spin" />
+                ) : (
+                  <ActivityIcon data-icon="inline-start" />
+                )}
+                Запустить обработку
+              </Button>
+            ) : null}
           </div>
         )}
 
