@@ -260,14 +260,59 @@ export class AppService {
       )) as Response
 
       if (response.ok) {
-        const balanceDetails =
+        const quotaProbeUrl =
           target.name === "OpenRouter"
-            ? "Баланс по обычному API-ключу заранее не проверяется"
-            : "Официальный API OpenAI не возвращает остаток баланса заранее"
-        return {
-          status: "up",
-          details: `${target.name} доступен. ${balanceDetails}.`,
-          checkedAt,
+            ? "https://openrouter.ai/api/v1/chat/completions"
+            : "https://api.openai.com/v1/chat/completions"
+
+        try {
+          const probeResponse = (await this.runWithTimeout(
+            () =>
+              fetch(quotaProbeUrl, {
+                method: "POST",
+                headers: {
+                  ...target.headers,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  model: "gpt-4o-mini",
+                  messages: [{ role: "user", content: "ping" }],
+                  max_tokens: 1,
+                }),
+              }),
+            10_000
+          )) as Response
+
+          if (probeResponse.ok) {
+            return {
+              status: "up",
+              details: `${target.name} доступен. Ключ рабочий, квота в норме.`,
+              checkedAt,
+            }
+          }
+
+          const rawBody = await this.readResponseTextSafe(probeResponse)
+          const probeDetails = this.formatBillingDetails(target.name, rawBody || `HTTP ${probeResponse.status}`)
+
+          if (this.hasBillingIssue(probeDetails)) {
+            return {
+              status: "down",
+              details: probeDetails,
+              checkedAt,
+            }
+          }
+
+          return {
+            status: "degraded",
+            details: probeDetails,
+            checkedAt,
+          }
+        } catch {
+          return {
+            status: "up",
+            details: `${target.name} доступен. Проверка квоты не завершена (timeout).`,
+            checkedAt,
+          }
         }
       }
 
