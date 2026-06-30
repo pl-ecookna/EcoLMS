@@ -1974,7 +1974,7 @@ export function MeetingsWorkspaceView({
               ) : null}
             </div>
           </ScrollArea>
-          <SheetFooter className="border-t px-5 py-4">
+          <SheetFooter className="border-t px-5 py-4 sm:flex-row sm:items-center sm:justify-end">
             <Button
               variant="outline"
               onClick={() => setCreateOpen(false)}
