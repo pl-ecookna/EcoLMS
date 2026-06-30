@@ -1,5 +1,8 @@
 # Changelog
 
+## 2026-06-30
+- Fixed `meetings` multipart upload signing for S3-compatible storage: query-signed `POST` requests now use `UNSIGNED-PAYLOAD` and include forwarded headers in the canonical SigV4 request, removing the `SignatureDoesNotMatch` failure that blocked meeting creation right after the draft record was created.
+
 ## 2026-06-02
 - Added meeting processing timing metrics and size-based ETA forecasting: completed meetings now expose actual end-to-end processing time, active runs show an estimate derived from nearby historical files, and meeting-start notifications include the expected processing window.
 - Recovered a stuck `meetings` upload where the file had already landed in S3 but the upload session never reached `complete`; backend now reconciles such sessions on meeting open/start and auto-enqueues `audio_prepared` when the file is present and `meeting_jobs` are still empty.

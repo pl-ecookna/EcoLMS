@@ -185,6 +185,7 @@ export interface S3SignRequestInput {
   key: string
   query?: Record<string, string>
   body?: string
+  headers?: Record<string, string>
   now?: Date
 }
 
@@ -200,9 +201,23 @@ export function signS3Request(input: S3SignRequestInput): {
     .map(encodePathSegment)
     .join("/")}`
 
-  const payloadHash = hashSha256(input.body ?? "")
-  const signedHeaders = "host"
-  const canonicalHeaders = `host:${endpointUrl.host}\n`
+  // Query-signed S3 requests for this provider must use UNSIGNED-PAYLOAD.
+  // Signing the literal body hash causes SignatureDoesNotMatch for multipart init/complete.
+  const payloadHash = "UNSIGNED-PAYLOAD"
+  const normalizedHeaders = Object.entries(input.headers ?? {}).map(([key, value]) => [
+    key.trim().toLowerCase(),
+    value.trim().replace(/\s+/g, " "),
+  ])
+  const headerMap = new Map<string, string>(normalizedHeaders)
+  headerMap.set("host", endpointUrl.host)
+
+  const canonicalHeaderEntries = [...headerMap.entries()].sort(([left], [right]) =>
+    left.localeCompare(right)
+  )
+  const signedHeaders = canonicalHeaderEntries.map(([key]) => key).join(";")
+  const canonicalHeaders = canonicalHeaderEntries
+    .map(([key, value]) => `${key}:${value}\n`)
+    .join("")
 
   const allQueryParams: Record<string, string> = {
     "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
@@ -245,8 +260,9 @@ export function signS3Request(input: S3SignRequestInput): {
   const signature = createHmac("sha256", signingKey).update(stringToSign, "utf8").digest("hex")
 
   const signedQuery = canonicalQuery(allQueryParams) + `&X-Amz-Signature=${signature}`
+  const responseHeaders = Object.fromEntries(canonicalHeaderEntries.filter(([key]) => key !== "host"))
   return {
     url: `${endpointUrl.origin}${canonicalUri}?${signedQuery}`,
-    headers: input.body !== undefined ? { "Content-Type": "application/xml" } : {},
+    headers: responseHeaders,
   }
 }

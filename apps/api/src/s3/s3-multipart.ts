@@ -45,11 +45,8 @@ export async function createMultipartUpload(
     bucket: cfg.bucket,
     key,
     query: { uploads: "" },
+    headers: contentType ? { "content-type": contentType } : undefined,
   })
-
-  if (contentType) {
-    headers["Content-Type"] = contentType
-  }
 
   const response = await fetch(url, { method: "POST", headers })
   if (!response.ok) {
@@ -109,6 +106,7 @@ export async function completeMultipartUpload(
     key,
     query: { uploadId: s3UploadId },
     body,
+    headers: { "content-type": "application/xml" },
   })
 
   const response = await fetch(url, {
