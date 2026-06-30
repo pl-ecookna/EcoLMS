@@ -204,10 +204,9 @@ export function signS3Request(input: S3SignRequestInput): {
   // Query-signed S3 requests for this provider must use UNSIGNED-PAYLOAD.
   // Signing the literal body hash causes SignatureDoesNotMatch for multipart init/complete.
   const payloadHash = "UNSIGNED-PAYLOAD"
-  const normalizedHeaders = Object.entries(input.headers ?? {}).map(([key, value]) => [
-    key.trim().toLowerCase(),
-    value.trim().replace(/\s+/g, " "),
-  ])
+  const normalizedHeaders: Array<[string, string]> = Object.entries(input.headers ?? {}).map(
+    ([key, value]) => [key.trim().toLowerCase(), value.trim().replace(/\s+/g, " ")]
+  )
   const headerMap = new Map<string, string>(normalizedHeaders)
   headerMap.set("host", endpointUrl.host)
 
