@@ -62,10 +62,11 @@ Browser
    `source_compiled`, `course_outline`, `course_content`, `course_test`.
 3. Для загрузки файлов `api` выдаёт параметры multipart upload и signed URL для частей.
 4. Файлы уходят напрямую в S3-compatible storage.
-5. `api` ставит задачу в Redis-очередь `ecolms:processing-jobs`.
-6. `worker` читает задачу, скачивает файлы, извлекает текст или транскрибирует аудио/видео, затем вызывает OpenAI/OpenRouter.
-7. Результаты этапов сохраняются в PostgreSQL как артефакты `md` и `json`.
-8. `web` показывает статус проекта, историю задач и позволяет редактировать Markdown-артефакты.
+5. Для `meetings` статус `uploaded` выставляется только после `completeUpload`, то есть после подтверждённого завершения multipart upload.
+6. `api` ставит задачу в Redis-очередь `ecolms:processing-jobs`.
+7. `worker` читает задачу, скачивает файлы, извлекает текст или транскрибирует аудио/видео, затем вызывает OpenAI/OpenRouter.
+8. Результаты этапов сохраняются в PostgreSQL как артефакты `md` и `json`.
+9. `web` показывает статус проекта, историю задач и позволяет редактировать Markdown-артефакты.
 
 ### Обязательная настройка CORS для S3
 
@@ -105,6 +106,7 @@ Browser
 - таблица `llm_prompts` хранит редактируемые prompt templates для `lms` и `meetings`;
 - очередь реализована через Redis list, без BullMQ;
 - presigned URL для S3 формируются собственным кодом, без AWS SDK.
+- для `meetings` `uploaded` выставляется только после успешного `completeUpload`; на этапе `initUpload` создаётся только upload session и запись о файле в состоянии `initiated`.
 
 ### `apps/worker`
 

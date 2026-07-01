@@ -698,15 +698,6 @@ export class MeetingsStore {
         ]
       )
 
-      await client.query(
-        `
-        update meetings
-        set status = 'uploaded', updated_at = now(), error_text = null
-        where id = $1
-        `,
-        [meetingId]
-      )
-
       return {
         uploadId,
         meetingId,

@@ -292,6 +292,11 @@ function isMeetingActiveStatus(status: MeetingStatus) {
 }
 
 function isMeetingUploadPending(meeting: MeetingDetailRecord | MeetingListRecord) {
+  const uploadStatus = meeting.sourceFile?.uploadStatus
+  if (uploadStatus === "initiated" || uploadStatus === "uploading") {
+    return true
+  }
+
   return (
     meeting.status === "uploaded" &&
     meeting.sourceFile?.uploadStatus != null &&
@@ -644,9 +649,8 @@ function MeetingInfoSheet({
                 <div className="rounded-2xl border p-4">
                   <div className="text-sm text-muted-foreground">Статус</div>
                   <div className="mt-2">
-                    <StatusBadge
-                      status={meeting.status}
-                      errorText={meeting.errorText}
+                    <MeetingStatusBadge
+                      meeting={meeting}
                       errorTitle="Ошибка обработки встречи"
                     />
                   </div>
@@ -851,6 +855,35 @@ function StatusBadge({
   )
 }
 
+function MeetingStatusBadge({
+  meeting,
+  errorText,
+  errorTitle,
+}: {
+  meeting: MeetingListRecord | MeetingDetailRecord
+  errorText?: string | null
+  errorTitle?: string | null
+}) {
+  if (isMeetingUploadPending(meeting)) {
+    return (
+      <Badge
+        variant="outline"
+        className="border-amber-200 bg-amber-50 text-amber-700"
+      >
+        Загрузка подтверждается
+      </Badge>
+    )
+  }
+
+  return (
+    <StatusBadge
+      status={meeting.status}
+      errorText={errorText ?? meeting.errorText}
+      errorTitle={errorTitle}
+    />
+  )
+}
+
 function EmptyState({
   title,
   description,
@@ -996,7 +1029,12 @@ function MeetingCardProgress({
 }) {
   const currentStatus = meeting.status
 
-  if (currentStatus !== "processing" && currentStatus !== "uploaded" && currentStatus !== "failed") {
+  if (
+    currentStatus !== "processing" &&
+    currentStatus !== "uploaded" &&
+    currentStatus !== "failed" &&
+    !isMeetingUploadPending(meeting)
+  ) {
     return null
   }
 
@@ -1669,9 +1707,8 @@ export function MeetingsWorkspaceView({
                               </div>
                             </Link>
                             <div className="flex items-start gap-2">
-                              <StatusBadge
-                                status={meeting.status}
-                                errorText={meeting.errorText}
+                              <MeetingStatusBadge
+                                meeting={meeting}
                                 errorTitle="Ошибка обработки встречи"
                               />
                               <DropdownMenu>

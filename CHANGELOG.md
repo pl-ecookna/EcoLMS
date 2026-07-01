@@ -1,6 +1,8 @@
 # Changelog
 
 ## 2026-07-01
+- Moved the `meetings` `uploaded` transition from upload initialization to successful multipart completion so server state now matches the real upload lifecycle.
+- Fixed the meetings list and detail status badges so a pending multipart upload no longer looks like a healthy finished record; the UI now shows a dedicated "Загрузка подтверждается" state until S3 completion is confirmed.
 - Added a web build-id endpoint and a client-side deployment guard so old browser tabs can detect a fresh deploy and prompt the user to reload instead of continuing with stale cached UI.
 - Fixed the upload progress rendering so the percentage no longer appears twice in meetings and LMS upload panels.
 
