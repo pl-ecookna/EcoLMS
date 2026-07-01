@@ -1,6 +1,8 @@
 import { Inter } from "next/font/google"
 import type { Metadata } from "next"
 
+import { DeploymentVersionGuard } from "@/components/deployment-version-guard"
+
 import "./globals.css"
 
 const inter = Inter({
@@ -24,6 +26,7 @@ export default function RootLayout({
     <html lang="ru" className={`${inter.variable} h-full antialiased`}>
       <body className="min-h-full flex flex-col bg-background text-foreground font-sans">
         <main className="flex-1">{children}</main>
+        <DeploymentVersionGuard />
       </body>
     </html>
   )

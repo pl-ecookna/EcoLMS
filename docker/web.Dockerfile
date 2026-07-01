@@ -13,6 +13,9 @@ RUN pnpm install --frozen-lockfile
 
 COPY . .
 
+RUN BUILD_ID="$(node -e 'process.stdout.write(String(Date.now()))')" && \
+    printf 'NEXT_PUBLIC_APP_BUILD_ID=%s\n' "$BUILD_ID" > apps/web/.env.production
+
 RUN pnpm --dir apps/web build
 
 FROM node:20-bookworm-slim AS runner

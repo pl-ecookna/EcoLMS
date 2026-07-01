@@ -1790,7 +1790,7 @@ export function EcolmsDashboard({
                   <Progress value={uploadProgress} className="flex-col gap-2">
                     <ProgressLabel>Загрузка файлов</ProgressLabel>
                     <ProgressValue>
-                      {(formattedValue, value) => `${formattedValue ?? value ?? 0}%`}
+                      {(formattedValue, value) => formattedValue ?? `${value ?? 0}`}
                     </ProgressValue>
                   </Progress>
                   <div className="text-xs text-muted-foreground">{uploadMessage}</div>
@@ -1879,7 +1879,7 @@ export function EcolmsDashboard({
                       <Progress value={uploadProgress} className="flex-col gap-2">
                         <ProgressLabel>Загрузка файлов</ProgressLabel>
                         <ProgressValue>
-                          {(formattedValue, value) => `${formattedValue ?? value ?? 0}%`}
+                          {(formattedValue, value) => formattedValue ?? `${value ?? 0}`}
                         </ProgressValue>
                       </Progress>
                       <div className="text-xs text-muted-foreground">{uploadMessage}</div>

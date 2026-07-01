@@ -1966,7 +1966,7 @@ export function MeetingsWorkspaceView({
                   <Progress value={createProgress} className="flex-col gap-2">
                     <ProgressLabel>Загрузка и запуск обработки</ProgressLabel>
                     <ProgressValue>
-                      {(formattedValue, value) => `${formattedValue ?? value ?? 0}%`}
+                      {(formattedValue, value) => formattedValue ?? `${value ?? 0}`}
                     </ProgressValue>
                   </Progress>
                   <div className="text-xs text-muted-foreground">{createMessage}</div>
