@@ -31,6 +31,7 @@ import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 
 import { cn } from "@/lib/utils"
+import { APP_BUILD_ID } from "@/lib/build-info"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -1881,13 +1882,24 @@ export function MeetingsWorkspaceView({
             resetCreateMeetingForm()
           }
         }}
-      >
-        <SheetContent className="w-full gap-0 sm:max-w-[680px]">
+        >
+          <SheetContent className="w-full gap-0 sm:max-w-[680px]">
           <SheetHeader className="border-b px-5 py-4">
             <SheetTitle>Добавить запись встречи</SheetTitle>
             <SheetDescription>
               Укажите название и загрузите один файл встречи для расшифровки.
             </SheetDescription>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <Badge
+                variant="outline"
+                className="border-dashed border-border/70 bg-muted/40 font-mono text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground"
+              >
+                Сборка: {APP_BUILD_ID}
+              </Badge>
+              <span className="text-xs leading-5 text-muted-foreground">
+                Это версия клиента, которая открыта у пользователя сейчас.
+              </span>
+            </div>
           </SheetHeader>
           <ScrollArea className="flex-1">
             <div className="flex flex-col gap-4 p-4">

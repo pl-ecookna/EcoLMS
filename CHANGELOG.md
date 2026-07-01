@@ -1,6 +1,7 @@
 # Changelog
 
 ## 2026-07-01
+- Added a client build badge to the meeting creation sheet header so users and support can visually identify which client build/commit is running in the browser.
 - Moved the `meetings` `uploaded` transition from upload initialization to successful multipart completion so server state now matches the real upload lifecycle.
 - Fixed the meetings list and detail status badges so a pending multipart upload no longer looks like a healthy finished record; the UI now shows a dedicated "Загрузка подтверждается" state until S3 completion is confirmed.
 - Added a web build-id endpoint and a client-side deployment guard so old browser tabs can detect a fresh deploy and prompt the user to reload instead of continuing with stale cached UI.
